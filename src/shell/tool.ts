@@ -1,0 +1,68 @@
+/**
+ * The `bash` tool, registered under pi's own name so it replaces the built-in.
+ *
+ * This is the one place where the design rule ("never reimplement a pi
+ * behaviour we only want to adjust") is deliberately broken: pi's bash spawns a
+ * real shell, and the whole point here is that no real shell exists. What we do
+ * keep is pi's *contract* — same tool name, same parameters, same truncation
+ * and temp-file spill (see output.ts) — so a session behaves the same whether
+ * or not this extension is loaded, right up to the moment a command outside the
+ * whitelist is attempted.
+ */
+
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import { executeShellCommand, SUPPORTED_COMMANDS } from "./execute.ts";
+import { truncateShellOutput } from "./output.ts";
+
+const bashSchema = Type.Object({
+	command: Type.String({ description: "The shell command to execute." }),
+	timeout: Type.Optional(
+		Type.Number({ description: "Timeout ms (not enforced in emulation, accepted for API compatibility)." }),
+	),
+});
+
+export type SafeguardBashInput = Static<typeof bashSchema>;
+
+interface BashDetails {
+	command: string;
+	error?: string;
+}
+
+export function createEmulatedBashTool(root: string): ToolDefinition<typeof bashSchema, BashDetails> {
+	return {
+		name: "bash",
+		label: "bash",
+		description:
+			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilv], sed -n 'X,Yp', wc -l, ` +
+			"head -n, tail -n, find [-name] [-type f/d] [-maxdepth], cat, ls, echo, pwd. " +
+			"git is forwarded to the system-installed git executable (requires git on PATH). " +
+			"Pipe chaining with | is supported. " +
+			"Output is truncated to the last 2000 lines or 50KB (whichever is hit first); when that " +
+			"happens the full output is written to a temp file named in the result, which you can " +
+			"inspect with read or sed -n 'X,Yp'.",
+		parameters: bashSchema,
+
+		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+			const command = (params.command ?? "").trim();
+			// The sandbox root follows the session cwd, so opening another
+			// solution in the IDE re-anchors it without restarting the agent.
+			const cwd = ctx?.cwd ?? root;
+			try {
+				// Pipe stages see the full stream; only the final result is capped.
+				const output = truncateShellOutput(executeShellCommand(command, cwd, cwd));
+				return {
+					content: [{ type: "text", text: output || "(no output)" }],
+					details: { command },
+				};
+			} catch (error) {
+				const message = (error as Error).message;
+				return {
+					content: [{ type: "text", text: `Error: ${message}` }],
+					details: { command, error: message },
+				};
+			}
+		},
+	};
+}

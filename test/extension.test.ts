@@ -1,0 +1,70 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import piSafeguards from "../src/index.js";
+
+/**
+ * Loads the extension the way pi does and hands back what it registered, so the
+ * wiring itself (tool name, schema, result shape) is covered and not just the
+ * emulator underneath it.
+ */
+function load(cwd: string) {
+	const tools: ToolDefinition[] = [];
+	const events: string[] = [];
+	const api = {
+		on: (event: string) => {
+			events.push(event);
+		},
+		registerTool: (tool: ToolDefinition) => {
+			tools.push(tool);
+		},
+	} as unknown as ExtensionAPI;
+
+	piSafeguards(api, { cwd } as ExtensionContext);
+	return { tools, events };
+}
+
+let root: string;
+
+beforeAll(() => {
+	root = mkdtempSync(join(tmpdir(), "safeguards-ext-"));
+	writeFileSync(join(root, "hello.txt"), "hello\n", "utf8");
+});
+
+afterAll(() => {
+	rmSync(root, { recursive: true, force: true });
+});
+
+describe("extension wiring", () => {
+	it("replaces bash and guards tool calls", () => {
+		const { tools, events } = load(root);
+		expect(tools.map((tool) => tool.name)).toEqual(["bash"]);
+		expect(events).toContain("tool_call");
+	});
+
+	it("announces the truncation contract in the tool description", () => {
+		const [bash] = load(root).tools;
+		expect(bash.description).toContain("2000 lines or 50KB");
+		expect(bash.description).toContain("temp file");
+	});
+
+	it("executes a command and returns pi's result shape", async () => {
+		const [bash] = load(root).tools;
+		const result = await bash.execute("call-1", { command: "cat hello.txt" }, undefined, undefined, {
+			cwd: root,
+		} as ExtensionContext);
+
+		expect(result.content).toEqual([{ type: "text", text: "hello\n" }]);
+		expect(result.details).toEqual({ command: "cat hello.txt" });
+	});
+
+	it("reports empty output the way pi's bash does", async () => {
+		const [bash] = load(root).tools;
+		const result = await bash.execute("call-2", { command: "echo" }, undefined, undefined, {
+			cwd: root,
+		} as ExtensionContext);
+		expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
+	});
+});
