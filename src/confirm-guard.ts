@@ -57,10 +57,10 @@ export function registerConfirmGuard(pi: ExtensionAPI, settingsPath?: string): v
 		// than either hang or silently run something the user asked to be asked
 		// about (the same fallback pi's own permission-gate.ts example uses).
 		if (!ctx.hasUI) {
-			return { block: true, reason: "Bestaetigung erforderlich, aber keine UI verfuegbar - Befehl abgelehnt." };
+			return { block: true, reason: "Bestätigung erforderlich, aber keine UI verfügbar - Befehl abgelehnt." };
 		}
 
-		const approved = await ctx.ui.confirm("Befehl bestaetigen", `Der Agent moechte ausfuehren:\n\n${command}`);
+		const approved = await ctx.ui.confirm("Befehl bestätigen", `Der Agent möchte ausführen:\n\n${command}`);
 		if (!approved) {
 			return { block: true, reason: "Vom Benutzer abgelehnt." };
 		}
