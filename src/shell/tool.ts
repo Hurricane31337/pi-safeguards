@@ -39,16 +39,29 @@ interface BashDetails {
  */
 function describeCommandPolicy(): string {
 	const settings = loadSafeguardsSettings();
-	if (settings.commandPolicy === "allow-all") {
-		return "Command policy: ALL commands are currently allowed to run (no whitelist), per user settings.";
-	}
-	if (settings.commandPolicy === "ask") {
-		return "Command policy: any command outside the built-in set may be attempted; the user will be asked to approve it before it runs, per user settings.";
-	}
-	if (settings.allowedCommands.length > 0) {
-		return `Additionally allowed by user settings: ${settings.allowedCommands.join(", ")}.`;
-	}
-	return "";
+	const denied = Object.entries(settings.commands)
+		.filter(([, s]) => s === "deny")
+		.map(([name]) => name);
+	const asked = Object.entries(settings.commands)
+		.filter(([, s]) => s === "ask")
+		.map(([name]) => name);
+	const allowed = Object.entries(settings.commands)
+		.filter(([, s]) => s === "allow")
+		.map(([name]) => name);
+
+	const parts: string[] = [];
+	if (denied.length > 0) parts.push(`disabled: ${denied.join(", ")}`);
+	if (asked.length > 0) parts.push(`require approval: ${asked.join(", ")}`);
+	if (allowed.length > 0) parts.push(`explicitly allowed: ${allowed.join(", ")}`);
+
+	const defaultNote =
+		settings.defaultPolicy === "allow"
+			? "Any other command not built in is also allowed to run."
+			: settings.defaultPolicy === "ask"
+				? "Any other command not built in requires approval first."
+				: "Any other command not built in is refused.";
+
+	return parts.length > 0 ? `Command policy, per user settings: ${parts.join("; ")}. ${defaultNote}` : defaultNote;
 }
 
 export function createEmulatedBashTool(root: string): ToolDefinition<typeof bashSchema, BashDetails> {

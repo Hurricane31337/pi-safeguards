@@ -1,9 +1,8 @@
 /**
- * Confirmation prompts, configured through settings.ts: confirmCommands /
- * confirmAll always ask about the commands named there, and commandPolicy
- * "ask" additionally asks about any bash command that is neither built in
- * nor explicitly named in allowedCommands (as opposed to "whitelist", which
- * refuses those outright, or "allow-all", which runs them without asking).
+ * Deny/ask enforcement, driven by settings.ts's per-command `commands` map and
+ * `defaultPolicy`: a command's effective state ("deny"/"ask"/"allow", see
+ * commandState()) decides whether it is blocked outright with no prompt at
+ * all, prompted via the confirm dialog, or let straight through.
  *
  * Two tool_call cases, because grep/find/ls exist twice over: pi-label_intern
  * activates them as native tools *and* the bash emulator can run them as
@@ -12,7 +11,7 @@
  * message even points it there ("Oder nutze die nativen pi-Tools: read,
  * write, edit, grep, find, ls"). rm/mv/cd/etc. have no native equivalent, so
  * they can only arrive via the bash case; grep/find/ls need both cases
- * checked or "confirm before grep" would silently never fire.
+ * checked or a "deny"/"ask" state on them would silently never apply.
  *
  * pi's tool_call hook is awaited before the tool runs (see pi's own shipped
  * examples/extensions/permission-gate.ts), and ctx.ui.confirm() works
@@ -23,7 +22,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadSafeguardsSettings } from "./settings.ts";
+import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
 import { parseArgs, splitByPipes, splitStatements } from "./shell/parse.ts";
 
@@ -68,6 +67,10 @@ async function confirmOrBlock(
 	return approved ? undefined : { block: true, reason: "Vom Benutzer abgelehnt." };
 }
 
+function state(program: string, settings: SafeguardsSettings) {
+	return commandState(program, settings, SUPPORTED_COMMANDS);
+}
+
 export function registerConfirmGuard(pi: ExtensionAPI, settingsPath?: string): void {
 	pi.on("tool_call", async (event, ctx) => {
 		// settingsPath is a test seam (defaults to the real settings.json path via
@@ -80,26 +83,28 @@ export function registerConfirmGuard(pi: ExtensionAPI, settingsPath?: string): v
 			if (!command) return undefined;
 
 			const programs = programsIn(command);
+			const states = programs.map((program) => state(program, settings));
 
-			// "ask": anything neither built in nor explicitly pre-approved (allowedCommands)
-			// gets a prompt here; execute.ts's dispatcher treats "ask" as unrestricted for
-			// commands that get this far, since by then the user has already approved it.
-			const isUnlisted = (program: string) =>
-				!(SUPPORTED_COMMANDS as readonly string[]).includes(program) && !settings.allowedCommands.includes(program);
-			const needsAskForUnlisted = settings.commandPolicy === "ask" && programs.some(isUnlisted);
+			// A denied program blocks the whole command immediately, no prompt at
+			// all - the point of "deny" is exactly to avoid ever waiting on a human
+			// for this one; execute.ts refuses it too (defense in depth), but
+			// stopping here also skips a pointless dialog for a command that could
+			// never have run anyway.
+			const deniedAt = states.indexOf("deny");
+			if (deniedAt !== -1) {
+				return { block: true, reason: `'${programs[deniedAt]}' ist deaktiviert (Einstellungen).` };
+			}
 
-			const needsConfirmation =
-				settings.confirmAll ||
-				programs.some((program) => settings.confirmCommands.includes(program)) ||
-				needsAskForUnlisted;
-			if (!needsConfirmation) return undefined;
-
+			if (!states.includes("ask")) return undefined;
 			return confirmOrBlock(ctx, `Der Agent möchte ausführen:\n\n${command}`);
 		}
 
 		if (NATIVE_TOOLS_WITH_BASH_EQUIVALENT.has(event.toolName)) {
-			const needsConfirmation = settings.confirmAll || settings.confirmCommands.includes(event.toolName);
-			if (!needsConfirmation) return undefined;
+			const toolState = state(event.toolName, settings);
+			if (toolState === "deny") {
+				return { block: true, reason: `'${event.toolName}' ist deaktiviert (Einstellungen).` };
+			}
+			if (toolState !== "ask") return undefined;
 
 			const argsText = JSON.stringify(event.input ?? {}, null, 2);
 			return confirmOrBlock(ctx, `Der Agent möchte das Werkzeug "${event.toolName}" aufrufen:\n\n${argsText}`);

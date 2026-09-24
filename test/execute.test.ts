@@ -34,15 +34,15 @@ describe("whitelist", () => {
 		expect(run("pwd")).toBe(root.replace(/\\/g, "/"));
 	});
 
-	it("refuses interpreters and shells by name, with a reason", () => {
+	it("refuses interpreters and shells by name, with a reason (defaultPolicy deny, the shipped default)", () => {
 		for (const program of ["python", "node", "npm", "bash", "sh", "cmd", "powershell", "curl", "wget"]) {
 			const output = run(`${program} -c "whatever"`);
-			expect(output).toContain(`'${program}' ist nicht verfuegbar`);
+			expect(output).toContain(`'${program}' ist deaktiviert`);
 		}
 	});
 
 	it("refuses anything else it does not implement", () => {
-		expect(run("touch foo")).toContain("wird nicht unterstuetzt");
+		expect(run("touch foo")).toContain("ist deaktiviert");
 	});
 });
 
@@ -172,43 +172,47 @@ describe("rm and mv", () => {
 });
 
 describe("command policy", () => {
-	it("whitelist mode (the default) refuses a command outside the built-in set", () => {
-		expect(run(`${node} -e "console.log(1)"`)).toContain("wird nicht unterstuetzt");
+	it("defaultPolicy deny (the default) refuses a command outside the built-in set", () => {
+		expect(run(`${node} -e "console.log(1)"`)).toContain("ist deaktiviert");
 	});
 
-	it("whitelist mode still refuses a blocked interpreter by name", () => {
-		expect(run('node -e "1"')).toContain("ist nicht verfuegbar");
+	it("deny also refuses a command by that name explicitly, even one that looks like an interpreter", () => {
+		expect(run('node -e "1"')).toContain("ist deaktiviert");
 	});
 
-	it("allow-all runs an arbitrary external command with no shell involved", () => {
-		expect(runWith(`${node} -e "console.log(1+1)"`, { commandPolicy: "allow-all" }).trim()).toBe("2");
+	it("defaultPolicy allow runs an arbitrary external command with no shell involved", () => {
+		expect(runWith(`${node} -e "console.log(1+1)"`, { defaultPolicy: "allow" }).trim()).toBe("2");
 	});
 
-	it("allow-all lifts the interpreter refusal too", () => {
-		expect(runWith('node -e "console.log(2+2)"', { commandPolicy: "allow-all" }).trim()).toBe("4");
+	it("defaultPolicy allow lifts the refusal for an interpreter-like name too", () => {
+		expect(runWith('node -e "console.log(2+2)"', { defaultPolicy: "allow" }).trim()).toBe("4");
 	});
 
-	it("allowedCommands opts a specific external command in without allow-all", () => {
-		expect(runWith(`${node} -e "console.log(3+3)"`, { allowedCommands: [process.execPath] }).trim()).toBe("6");
+	it("an explicit allow override opts a specific external command in without changing defaultPolicy", () => {
+		expect(runWith(`${node} -e "console.log(3+3)"`, { commands: { [process.execPath]: "allow" } }).trim()).toBe("6");
 	});
 
-	it("allowedCommands overrides the interpreter refusal for exactly the named program", () => {
-		expect(runWith('node -e "console.log(4+4)"', { allowedCommands: ["node"] }).trim()).toBe("8");
+	it("an explicit allow override works for an interpreter-like name specifically", () => {
+		expect(runWith('node -e "console.log(4+4)"', { commands: { node: "allow" } }).trim()).toBe("8");
 	});
 
-	it("naming one command in allowedCommands does not open the whole blocklist", () => {
-		expect(runWith('python -c "print(1)"', { allowedCommands: ["node"] })).toContain("ist nicht verfuegbar");
+	it("allowing one command by name does not open the door for another", () => {
+		expect(runWith('python -c "print(1)"', { commands: { node: "allow" } })).toContain("ist deaktiviert");
+	});
+
+	it("an explicit deny override refuses a built-in command that would otherwise run", () => {
+		expect(runWith("cat src/a.txt", { commands: { cat: "deny" } })).toContain("ist deaktiviert");
 	});
 
 	// "ask" only ever reaches executeShellCommand's dispatcher after
 	// confirm-guard.ts's tool_call hook already asked and the user approved -
-	// there is no prompting left to do here, so dispatch treats it exactly
-	// like allow-all: run the command, no interpreter refusal.
-	it("ask runs an arbitrary external command, same as allow-all", () => {
-		expect(runWith(`${node} -e "console.log(5+5)"`, { commandPolicy: "ask" }).trim()).toBe("10");
+	// there is no prompting left to do here, so dispatch runs it exactly like
+	// "allow" would.
+	it("ask (already approved) runs an arbitrary external command, same as allow", () => {
+		expect(runWith(`${node} -e "console.log(5+5)"`, { defaultPolicy: "ask" }).trim()).toBe("10");
 	});
 
-	it("ask lifts the interpreter refusal too", () => {
-		expect(runWith('node -e "console.log(6+6)"', { commandPolicy: "ask" }).trim()).toBe("12");
+	it("an explicit ask override (already approved) runs an interpreter-like name too", () => {
+		expect(runWith('node -e "console.log(6+6)"', { commands: { node: "ask" } }).trim()).toBe("12");
 	});
 });

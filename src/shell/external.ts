@@ -1,10 +1,10 @@
 /**
- * Runs a command outside the hand-implemented set, when settings.ts allows it
- * (either commandPolicy "allow-all", or the program named explicitly in
- * allowedCommands). Spawned as an argv array exactly like git.ts's execGit —
- * no shell, so the command string the model wrote is never re-parsed by
- * anything but this emulator's own parser. Pipes around it are handled by the
- * emulator via stdin/stdout; the external process never sees them.
+ * Runs a command outside the hand-implemented set, once settings.ts's
+ * commandState() has resolved it to "ask" (already approved) or "allow".
+ * Spawned as an argv array exactly like git.ts's execGit — no shell, so the
+ * command string the model wrote is never re-parsed by anything but this
+ * emulator's own parser. Pipes around it are handled by the emulator via
+ * stdin/stdout; the external process never sees them.
  */
 
 import { spawnSync } from "node:child_process";

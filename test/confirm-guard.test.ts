@@ -40,7 +40,7 @@ function guard() {
 }
 
 describe("confirm guard", () => {
-	it("does nothing when no confirmation is configured (missing settings file)", async () => {
+	it("does nothing when no override is configured (missing settings file)", async () => {
 		rmSync(settingsPath, { force: true });
 		const call = guard();
 		const confirm = vi.fn();
@@ -48,117 +48,113 @@ describe("confirm guard", () => {
 		expect(confirm).not.toHaveBeenCalled();
 	});
 
-	it("ignores tools other than bash", async () => {
-		writeSettings({ confirmAll: true });
+	it("ignores tools other than bash and the native grep/find/ls", async () => {
+		writeSettings({ commands: { read: "ask" } });
 		const call = guard();
 		const confirm = vi.fn();
 		expect(await call("read", { file_path: "x" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 		expect(confirm).not.toHaveBeenCalled();
 	});
 
-	it("asks before a command named in confirmCommands, and blocks on refusal", async () => {
-		writeSettings({ confirmCommands: ["rm"] });
-		const call = guard();
-		const confirm = vi.fn().mockResolvedValue(false);
-		const result = await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } });
-		expect(confirm).toHaveBeenCalledOnce();
-		expect(result?.block).toBe(true);
-	});
-
-	it("allows the command through when the user approves", async () => {
-		writeSettings({ confirmCommands: ["rm"] });
-		const call = guard();
-		const confirm = vi.fn().mockResolvedValue(true);
-		expect(await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
-	});
-
-	it("does not ask for a command not in confirmCommands", async () => {
-		writeSettings({ confirmCommands: ["rm"] });
-		const call = guard();
-		const confirm = vi.fn();
-		expect(await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
-		expect(confirm).not.toHaveBeenCalled();
-	});
-
-	it("catches a piped-in command too, not just the first segment", async () => {
-		writeSettings({ confirmCommands: ["rm"] });
-		const call = guard();
-		const confirm = vi.fn().mockResolvedValue(true);
-		await call("bash", { command: "echo x | rm y" }, { hasUI: true, ui: { confirm } });
-		expect(confirm).toHaveBeenCalledOnce();
-	});
-
-	it("confirmAll asks for every command", async () => {
-		writeSettings({ confirmAll: true });
-		const call = guard();
-		const confirm = vi.fn().mockResolvedValue(true);
-		await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } });
-		expect(confirm).toHaveBeenCalledOnce();
-	});
-
-	it("fails closed when confirmation is needed but there is no UI to ask", async () => {
-		writeSettings({ confirmCommands: ["rm"] });
-		const call = guard();
-		const confirm = vi.fn();
-		const result = await call("bash", { command: "rm foo" }, { hasUI: false, ui: { confirm } });
-		expect(result?.block).toBe(true);
-		expect(confirm).not.toHaveBeenCalled();
-	});
-
-	describe("ask policy", () => {
-		it("asks about a command that is neither built in nor allowed", async () => {
-			writeSettings({ commandPolicy: "ask" });
-			const call = guard();
-			const confirm = vi.fn().mockResolvedValue(true);
-			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
-			expect(confirm).toHaveBeenCalledOnce();
-		});
-
-		it("blocks the unlisted command on refusal", async () => {
-			writeSettings({ commandPolicy: "ask" });
+	describe("ask", () => {
+		it("asks before a command set to ask, and blocks on refusal", async () => {
+			writeSettings({ commands: { rm: "ask" } });
 			const call = guard();
 			const confirm = vi.fn().mockResolvedValue(false);
-			const result = await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } });
+			const result = await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } });
+			expect(confirm).toHaveBeenCalledOnce();
 			expect(result?.block).toBe(true);
 		});
 
-		it("does not ask about a built-in command", async () => {
-			writeSettings({ commandPolicy: "ask" });
+		it("allows the command through when the user approves", async () => {
+			writeSettings({ commands: { rm: "ask" } });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+		});
+
+		it("does not ask for a command not set to ask", async () => {
+			writeSettings({ commands: { rm: "ask" } });
 			const call = guard();
 			const confirm = vi.fn();
 			expect(await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("does not ask about a command already pre-approved via allowedCommands", async () => {
-			writeSettings({ commandPolicy: "ask", allowedCommands: ["npm"] });
+		it("catches a piped-in command too, not just the first segment", async () => {
+			writeSettings({ commands: { rm: "ask" } });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			await call("bash", { command: "echo x | rm y" }, { hasUI: true, ui: { confirm } });
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("defaultPolicy ask covers anything not built in", async () => {
+			writeSettings({ defaultPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("does not ask about a built-in command under defaultPolicy ask", async () => {
+			writeSettings({ defaultPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("does not ask about a command explicitly allowed, even under defaultPolicy ask", async () => {
+			writeSettings({ defaultPolicy: "ask", commands: { npm: "allow" } });
 			const call = guard();
 			const confirm = vi.fn();
 			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("whitelist (the default) does not ask about unlisted commands - it just refuses them later", async () => {
-			writeSettings({ commandPolicy: "whitelist" });
+		it("fails closed when a prompt is needed but there is no UI to ask", async () => {
+			writeSettings({ commands: { rm: "ask" } });
 			const call = guard();
 			const confirm = vi.fn();
-			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			const result = await call("bash", { command: "rm foo" }, { hasUI: false, ui: { confirm } });
+			expect(result?.block).toBe(true);
+			expect(confirm).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("deny", () => {
+		it("blocks a denied command immediately, without asking at all", async () => {
+			writeSettings({ commands: { rm: "deny" } });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("bash", { command: "rm foo" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("allow-all does not ask about unlisted commands - it just runs them", async () => {
-			writeSettings({ commandPolicy: "allow-all" });
+		it("blocks immediately even with no UI available - denial never needs one", async () => {
+			writeSettings({ commands: { rm: "deny" } });
 			const call = guard();
 			const confirm = vi.fn();
-			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			const result = await call("bash", { command: "rm foo" }, { hasUI: false, ui: { confirm } });
+			expect(result?.block).toBe(true);
+		});
+
+		it("deny wins over defaultPolicy allow", async () => {
+			writeSettings({ defaultPolicy: "allow", commands: { rm: "deny" } });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("bash", { command: "rm foo" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("fails closed for an unlisted command with no UI to ask", async () => {
-			writeSettings({ commandPolicy: "ask" });
+		it("defaultPolicy deny (the shipped default) blocks anything not built in, without asking", async () => {
+			writeSettings({});
 			const call = guard();
 			const confirm = vi.fn();
-			const result = await call("bash", { command: "npm install" }, { hasUI: false, ui: { confirm } });
+			const result = await call("bash", { command: "python -c 1" }, { hasUI: true, ui: { confirm } });
 			expect(result?.block).toBe(true);
 			expect(confirm).not.toHaveBeenCalled();
 		});
@@ -166,11 +162,11 @@ describe("confirm guard", () => {
 
 	// grep/find/ls exist as both native pi tools and emulated bash commands; a
 	// model asked to search or list reaches for the native tool, not bash - so
-	// confirmCommands/confirmAll must also be checked against the native
-	// toolName directly, or "confirm before grep" would never fire in practice.
+	// deny/ask must also be checked against the native toolName directly, or a
+	// state set on "grep" would never apply in practice.
 	describe("native tools with a bash equivalent (grep, find, ls)", () => {
-		it("asks before the native grep tool when grep is in confirmCommands", async () => {
-			writeSettings({ confirmCommands: ["grep"] });
+		it("asks before the native grep tool when grep is set to ask", async () => {
+			writeSettings({ commands: { grep: "ask" } });
 			const call = guard();
 			const confirm = vi.fn().mockResolvedValue(true);
 			expect(await call("grep", { pattern: "TODO", path: "." }, { hasUI: true, ui: { confirm } })).toBeUndefined();
@@ -178,7 +174,7 @@ describe("confirm guard", () => {
 		});
 
 		it("asks before the native ls and find tools the same way", async () => {
-			writeSettings({ confirmCommands: ["ls", "find"] });
+			writeSettings({ commands: { ls: "ask", find: "ask" } });
 			const call = guard();
 			const confirm = vi.fn().mockResolvedValue(true);
 			await call("ls", { path: "." }, { hasUI: true, ui: { confirm } });
@@ -187,31 +183,32 @@ describe("confirm guard", () => {
 		});
 
 		it("blocks the native tool call on refusal", async () => {
-			writeSettings({ confirmCommands: ["grep"] });
+			writeSettings({ commands: { grep: "ask" } });
 			const call = guard();
 			const confirm = vi.fn().mockResolvedValue(false);
 			const result = await call("grep", { pattern: "secret" }, { hasUI: true, ui: { confirm } });
 			expect(result?.block).toBe(true);
 		});
 
-		it("confirmAll covers the native tools too", async () => {
-			writeSettings({ confirmAll: true });
+		it("denies the native tool call immediately, without asking, when set to deny", async () => {
+			writeSettings({ commands: { grep: "deny" } });
 			const call = guard();
-			const confirm = vi.fn().mockResolvedValue(true);
-			await call("ls", { path: "." }, { hasUI: true, ui: { confirm } });
-			expect(confirm).toHaveBeenCalledOnce();
+			const confirm = vi.fn();
+			const result = await call("grep", { pattern: "x" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
+			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("does not ask about a native tool not named in confirmCommands", async () => {
-			writeSettings({ confirmCommands: ["grep"] });
+		it("does not ask about a native tool with no override - built-ins default to allow", async () => {
+			writeSettings({ commands: { grep: "ask" } });
 			const call = guard();
 			const confirm = vi.fn();
 			expect(await call("ls", { path: "." }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("the ask commandPolicy does not affect native tools - they are not part of the bash whitelist", async () => {
-			writeSettings({ commandPolicy: "ask" });
+		it("defaultPolicy does not affect native tools - they are always built in, never 'unlisted'", async () => {
+			writeSettings({ defaultPolicy: "ask" });
 			const call = guard();
 			const confirm = vi.fn();
 			expect(await call("grep", { pattern: "x" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
@@ -219,7 +216,7 @@ describe("confirm guard", () => {
 		});
 
 		it("fails closed for a native tool with no UI to ask", async () => {
-			writeSettings({ confirmCommands: ["grep"] });
+			writeSettings({ commands: { grep: "ask" } });
 			const call = guard();
 			const confirm = vi.fn();
 			const result = await call("grep", { pattern: "x" }, { hasUI: false, ui: { confirm } });

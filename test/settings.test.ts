@@ -2,10 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SAFEGUARDS_SETTINGS, getSafeguardsJsonPath, loadSafeguardsSettings } from "../src/settings.js";
+import {
+	commandState,
+	DEFAULT_SAFEGUARDS_SETTINGS,
+	getSafeguardsJsonPath,
+	loadSafeguardsSettings,
+} from "../src/settings.js";
 
 const dir = mkdtempSync(join(tmpdir(), "safeguards-settings-"));
 const path = join(dir, "safeguards.json");
+const builtins = ["ls", "cat", "git"] as const;
 
 afterAll(() => {
 	rmSync(dir, { recursive: true, force: true });
@@ -25,40 +31,53 @@ describe("loadSafeguardsSettings", () => {
 		writeFileSync(
 			path,
 			JSON.stringify({
-				commandPolicy: "allow-all",
-				allowedCommands: ["npm", "docker"],
-				confirmCommands: ["rm", "mv"],
-				confirmAll: true,
+				commands: { rm: "deny", npm: "allow", python: "ask" },
+				defaultPolicy: "ask",
 			}),
 			"utf8",
 		);
 		expect(loadSafeguardsSettings(path)).toEqual({
-			commandPolicy: "allow-all",
-			allowedCommands: ["npm", "docker"],
-			confirmCommands: ["rm", "mv"],
-			confirmAll: true,
+			commands: { rm: "deny", npm: "allow", python: "ask" },
+			defaultPolicy: "ask",
 		});
 	});
 
-	it("treats an unrecognised commandPolicy value as the safe default", () => {
-		writeFileSync(path, JSON.stringify({ commandPolicy: "yolo" }), "utf8");
-		expect(loadSafeguardsSettings(path).commandPolicy).toBe("whitelist");
+	it("treats an unrecognised defaultPolicy value as the safe default", () => {
+		writeFileSync(path, JSON.stringify({ defaultPolicy: "yolo" }), "utf8");
+		expect(loadSafeguardsSettings(path).defaultPolicy).toBe("deny");
 	});
 
-	it("accepts the ask commandPolicy", () => {
-		writeFileSync(path, JSON.stringify({ commandPolicy: "ask" }), "utf8");
-		expect(loadSafeguardsSettings(path).commandPolicy).toBe("ask");
+	it("drops a command entry with an unrecognised state instead of throwing", () => {
+		writeFileSync(path, JSON.stringify({ commands: { rm: "yolo", mv: "deny" } }), "utf8");
+		expect(loadSafeguardsSettings(path).commands).toEqual({ mv: "deny" });
 	});
 
-	it("ignores non-string entries in array fields instead of throwing", () => {
-		writeFileSync(
-			path,
-			JSON.stringify({ allowedCommands: ["ok", 5, null], confirmCommands: "not-an-array" }),
-			"utf8",
-		);
-		const settings = loadSafeguardsSettings(path);
-		expect(settings.allowedCommands).toEqual(["ok"]);
-		expect(settings.confirmCommands).toEqual([]);
+	it("trims command names and ignores an empty one", () => {
+		writeFileSync(path, JSON.stringify({ commands: { " rm ": "deny", "  ": "deny" } }), "utf8");
+		expect(loadSafeguardsSettings(path).commands).toEqual({ rm: "deny" });
+	});
+
+	it("ignores a non-object commands value instead of throwing", () => {
+		writeFileSync(path, JSON.stringify({ commands: "not-an-object" }), "utf8");
+		expect(loadSafeguardsSettings(path).commands).toEqual({});
+	});
+});
+
+describe("commandState", () => {
+	it("uses the explicit override when present, for a built-in or not", () => {
+		const settings = { commands: { ls: "deny", npm: "allow" }, defaultPolicy: "deny" } as const;
+		expect(commandState("ls", settings, builtins)).toBe("deny");
+		expect(commandState("npm", settings, builtins)).toBe("allow");
+	});
+
+	it("defaults a built-in command to allow when not overridden", () => {
+		const settings = { commands: {}, defaultPolicy: "deny" } as const;
+		expect(commandState("ls", settings, builtins)).toBe("allow");
+	});
+
+	it("falls back to defaultPolicy for a non-built-in command when not overridden", () => {
+		const settings = { commands: {}, defaultPolicy: "ask" } as const;
+		expect(commandState("npm", settings, builtins)).toBe("ask");
 	});
 });
 

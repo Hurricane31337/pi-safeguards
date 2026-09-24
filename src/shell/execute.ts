@@ -9,7 +9,7 @@
 
 import { resolve } from "node:path";
 import { isOutside } from "../paths.ts";
-import { loadSafeguardsSettings, type SafeguardsSettings } from "../settings.ts";
+import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "../settings.ts";
 import {
 	execCat,
 	execFind,
@@ -44,37 +44,6 @@ export const SUPPORTED_COMMANDS = [
 	"git",
 ] as const;
 
-/**
- * Interpreters and shells that could execute arbitrary code or reach around the
- * path sandbox. They are named explicitly so the refusal says *why* and the
- * model stops looking for a workaround, rather than falling through to the
- * generic "not supported" message.
- */
-const BLOCKED = new Set([
-	"python",
-	"python3",
-	"python2",
-	"py",
-	"pip",
-	"pip3",
-	"node",
-	"npm",
-	"npx",
-	"ruby",
-	"perl",
-	"php",
-	"powershell",
-	"pwsh",
-	"cmd",
-	"sh",
-	"bash",
-	"zsh",
-	"fish",
-	"curl",
-	"wget",
-	"Invoke-WebRequest",
-]);
-
 function executeSegment(
 	segment: string,
 	cwd: string,
@@ -95,20 +64,14 @@ function executeSegment(
 	if (args.length === 0) return stdin ?? "";
 	const program = args[0];
 
-	// Naming a command in allowedCommands is an explicit per-command opt-in and
-	// wins even over the interpreter refusal below - that refusal exists to stop
-	// an unconsidered command from running, not to override a deliberate choice.
-	const explicitlyAllowed = settings.allowedCommands.includes(program);
 	// "ask" reaches here only after confirm-guard.ts's tool_call hook already
-	// asked and the user approved - by this point it must behave exactly like
-	// "allow-all" for dispatch purposes. Only whether a prompt happened first
-	// differs between the two, and that decision was already made upstream.
-	const unrestricted = settings.commandPolicy === "ask" || settings.commandPolicy === "allow-all";
-
-	if (BLOCKED.has(program) && !explicitlyAllowed && !unrestricted) {
+	// asked and the user approved - by this point it must run exactly like
+	// "allow" would. Only whether a prompt happened first differs between the
+	// two, and that decision was already made upstream.
+	if (commandState(program, settings, SUPPORTED_COMMANDS) === "deny") {
 		return (
-			`[bash-emulator] '${program}' ist nicht verfuegbar.\n` +
-			`Verwende stattdessen die eingebauten Werkzeuge: ${SUPPORTED_COMMANDS.join(", ")}\n` +
+			`[bash-emulator] '${program}' ist deaktiviert (Einstellungen).\n` +
+			`Verfuegbar: ${SUPPORTED_COMMANDS.join(", ")}\n` +
 			"Oder nutze die nativen pi-Tools: read, write, edit, grep, find, ls"
 		);
 	}
@@ -147,17 +110,10 @@ function executeSegment(
 			case "git":
 				return execGit(args, cwd, stdin);
 			default:
-				// Anything else: run for real, without a shell, only when settings
-				// say to - either this exact name was opted into, or the policy
-				// allows unlisted commands through (ask, after approval, or
-				// allow-all). Otherwise it is simply not a command this emulator runs.
-				if (explicitlyAllowed || unrestricted) {
-					return execExternal(args, cwd, stdin);
-				}
-				return (
-					`[bash-emulator] '${program}' wird nicht unterstuetzt.\n` +
-					`Verfuegbar: ${SUPPORTED_COMMANDS.join(", ")}`
-				);
+				// Not one of the emulated commands, and not denied (checked above) -
+				// so its state is "ask" (already approved) or "allow": run it for
+				// real, without a shell.
+				return execExternal(args, cwd, stdin);
 		}
 	} catch (error) {
 		return `Error in ${program}: ${(error as Error).message}`;
@@ -196,6 +152,10 @@ export function executeShellCommand(
 	for (const statement of splitStatements(input)) {
 		const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
 		if (cdMatch) {
+			if (commandState("cd", settings, SUPPORTED_COMMANDS) === "deny") {
+				outputs.push("[bash-emulator] 'cd' ist deaktiviert (Einstellungen).");
+				continue;
+			}
 			const arg = unquote((cdMatch[1] ?? "").trim());
 			if (arg) {
 				const target = resolve(workingDir, arg);

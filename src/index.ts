@@ -6,13 +6,14 @@
  *   1. pi's built-in file tools are confined to the session's working
  *      directory (path-guard.ts).
  *   2. `bash` is replaced by a pure-Node emulator that by default runs only a
- *      whitelisted set of commands and no interpreter or shell (shell/), so
- *      there is no path from a tool call to arbitrary code execution — and no
+ *      fixed set of commands and no interpreter or shell (shell/), so there is
+ *      no path from a tool call to arbitrary code execution — and no
  *      dependency on Unix utilities that Windows does not have. That default
- *      is itself configurable (settings.ts): a user can widen the whitelist,
- *      or turn it off entirely, at their own risk.
- *   3. Any bash command can be made to ask for confirmation before it runs
- *      (confirm-guard.ts), independent of whether it is whitelisted.
+ *      is itself configurable per command (settings.ts): each one, built in
+ *      or not, can be denied outright, asked about, or allowed unconditionally.
+ *   3. Any command, including a built-in one, can be set to ask for
+ *      confirmation before it runs (confirm-guard.ts) or to be denied
+ *      outright with no prompt at all, independent of the others' settings.
  *
  * It lives outside pi-improved on purpose. pi-improved is installed globally
  * and therefore also loaded by developers' terminal sessions; these safeguards

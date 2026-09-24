@@ -24,46 +24,48 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export type CommandPolicy = "whitelist" | "ask" | "allow-all";
+/**
+ * "deny": refused outright, no prompt, ever.
+ * "ask": prompted via confirm-guard.ts's dialog; runs (via argv, no shell for
+ *   an external command) only on approval.
+ * "allow": runs immediately, no prompt.
+ */
+export type CommandState = "deny" | "ask" | "allow";
 
 export interface SafeguardsSettings {
 	/**
-	 * Governs any command that is neither one of the built-in emulated ones
-	 * nor named in allowedCommands:
-	 *   - "whitelist" (default): refused outright, no prompt. Fully autonomous,
-	 *     but limited to the built-in set plus whatever was named ahead of time.
-	 *   - "ask": prompted via the same confirm dialog as confirmCommands/
-	 *     confirmAll, run (via argv, no shell) only on approval. Interactive,
-	 *     but nothing runs unattended that was not explicitly pre-approved.
-	 *   - "allow-all": run immediately, no prompt — including the interpreters
-	 *     normally refused (python, node, curl, sh, ...). A deliberate escape
-	 *     hatch for a fully-trusted setup, not a safer default.
-	 * "ask" and "allow-all" both bypass the interpreter refusal in execute.ts;
-	 * they differ only in whether confirm-guard.ts asks first.
+	 * Explicit per-command override, keyed by program name (e.g. "rm", "npm",
+	 * "python") — the single place to make one specific command possible or
+	 * not, and if possible, ask or always allow. Applies to a built-in
+	 * emulated command exactly the same as an external one: naming "rm" here
+	 * with "deny" refuses it even though it is normally always available, and
+	 * naming "npm" with "allow" runs it (via argv, no shell) without asking,
+	 * even though it is not built in.
+	 *
+	 * A name absent from this map falls back to "allow" for a built-in
+	 * emulated command (today's default), or to defaultPolicy for anything
+	 * else — there is deliberately no separate hardcoded interpreter
+	 * blocklist any more: defaultPolicy "deny" (the shipped default) already
+	 * refuses python/node/curl/etc. exactly as before, and a specific one of
+	 * them can be allowed or asked about individually here without having to
+	 * loosen the policy for everything else.
 	 */
-	commandPolicy: CommandPolicy;
-	/**
-	 * Extra command names allowed to run (spawned via argv) even in
-	 * "whitelist" mode. Naming one explicitly here overrides the interpreter
-	 * refusal for that name specifically — this is the "only allow certain
-	 * commands" knob, distinct from the all-or-nothing commandPolicy switch.
-	 */
-	allowedCommands: string[];
-	/** Command names that always prompt for confirmation before running. */
-	confirmCommands: string[];
-	/** Prompt before every bash call, regardless of confirmCommands. */
-	confirmAll: boolean;
+	commands: Record<string, CommandState>;
+	/** Governs any command that is neither a built-in emulated one nor named in `commands`. */
+	defaultPolicy: CommandState;
 }
 
 export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
-	commandPolicy: "whitelist",
-	allowedCommands: [],
-	confirmCommands: [],
-	confirmAll: false,
+	commands: {},
+	defaultPolicy: "deny",
 };
 
 export function getSafeguardsJsonPath(): string {
 	return process.env.PI_SAFEGUARDS_JSON_PATH || join(getAgentDir(), "safeguards.json");
+}
+
+function isCommandState(value: unknown): value is CommandState {
+	return value === "deny" || value === "ask" || value === "allow";
 }
 
 /**
@@ -77,19 +79,32 @@ export function getSafeguardsJsonPath(): string {
 export function loadSafeguardsSettings(path: string = getSafeguardsJsonPath()): SafeguardsSettings {
 	try {
 		const raw = readFileSync(path, "utf8");
-		const parsed = JSON.parse(raw) as Partial<SafeguardsSettings>;
+		const parsed = JSON.parse(raw) as Partial<Record<keyof SafeguardsSettings, unknown>>;
+
+		const commands: Record<string, CommandState> = {};
+		if (parsed.commands && typeof parsed.commands === "object") {
+			for (const [name, state] of Object.entries(parsed.commands as Record<string, unknown>)) {
+				const trimmed = name.trim();
+				if (trimmed && isCommandState(state)) commands[trimmed] = state;
+			}
+		}
+
 		return {
-			commandPolicy:
-				parsed.commandPolicy === "allow-all" ? "allow-all" : parsed.commandPolicy === "ask" ? "ask" : "whitelist",
-			allowedCommands: Array.isArray(parsed.allowedCommands)
-				? parsed.allowedCommands.filter((c) => typeof c === "string")
-				: [],
-			confirmCommands: Array.isArray(parsed.confirmCommands)
-				? parsed.confirmCommands.filter((c) => typeof c === "string")
-				: [],
-			confirmAll: parsed.confirmAll === true,
+			commands,
+			defaultPolicy: isCommandState(parsed.defaultPolicy) ? parsed.defaultPolicy : "deny",
 		};
 	} catch {
 		return DEFAULT_SAFEGUARDS_SETTINGS;
 	}
+}
+
+/**
+ * Resolves the effective state for one command name. `builtins` is passed in
+ * (rather than imported from shell/execute.ts) to avoid a circular import -
+ * execute.ts already imports this module for SafeguardsSettings itself.
+ */
+export function commandState(program: string, settings: SafeguardsSettings, builtins: readonly string[]): CommandState {
+	const explicit = settings.commands[program];
+	if (explicit) return explicit;
+	return builtins.includes(program) ? "allow" : settings.defaultPolicy;
 }
