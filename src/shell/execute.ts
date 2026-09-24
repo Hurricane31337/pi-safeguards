@@ -99,8 +99,13 @@ function executeSegment(
 	// wins even over the interpreter refusal below - that refusal exists to stop
 	// an unconsidered command from running, not to override a deliberate choice.
 	const explicitlyAllowed = settings.allowedCommands.includes(program);
+	// "ask" reaches here only after confirm-guard.ts's tool_call hook already
+	// asked and the user approved - by this point it must behave exactly like
+	// "allow-all" for dispatch purposes. Only whether a prompt happened first
+	// differs between the two, and that decision was already made upstream.
+	const unrestricted = settings.commandPolicy === "ask" || settings.commandPolicy === "allow-all";
 
-	if (BLOCKED.has(program) && !explicitlyAllowed && settings.commandPolicy !== "allow-all") {
+	if (BLOCKED.has(program) && !explicitlyAllowed && !unrestricted) {
 		return (
 			`[bash-emulator] '${program}' ist nicht verfuegbar.\n` +
 			`Verwende stattdessen die eingebauten Werkzeuge: ${SUPPORTED_COMMANDS.join(", ")}\n` +
@@ -143,9 +148,10 @@ function executeSegment(
 				return execGit(args, cwd, stdin);
 			default:
 				// Anything else: run for real, without a shell, only when settings
-				// say to - either this exact name was opted into, or every command
-				// is allowed. Otherwise it is simply not a command this emulator runs.
-				if (explicitlyAllowed || settings.commandPolicy === "allow-all") {
+				// say to - either this exact name was opted into, or the policy
+				// allows unlisted commands through (ask, after approval, or
+				// allow-all). Otherwise it is simply not a command this emulator runs.
+				if (explicitlyAllowed || unrestricted) {
 					return execExternal(args, cwd, stdin);
 				}
 				return (

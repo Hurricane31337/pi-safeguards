@@ -199,4 +199,16 @@ describe("command policy", () => {
 	it("naming one command in allowedCommands does not open the whole blocklist", () => {
 		expect(runWith('python -c "print(1)"', { allowedCommands: ["node"] })).toContain("ist nicht verfuegbar");
 	});
+
+	// "ask" only ever reaches executeShellCommand's dispatcher after
+	// confirm-guard.ts's tool_call hook already asked and the user approved -
+	// there is no prompting left to do here, so dispatch treats it exactly
+	// like allow-all: run the command, no interpreter refusal.
+	it("ask runs an arbitrary external command, same as allow-all", () => {
+		expect(runWith(`${node} -e "console.log(5+5)"`, { commandPolicy: "ask" }).trim()).toBe("10");
+	});
+
+	it("ask lifts the interpreter refusal too", () => {
+		expect(runWith('node -e "console.log(6+6)"', { commandPolicy: "ask" }).trim()).toBe("12");
+	});
 });

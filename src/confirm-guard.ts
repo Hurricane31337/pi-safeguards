@@ -1,6 +1,10 @@
 /**
  * Confirmation prompts for the emulated bash tool, configured through
- * settings.ts (confirmCommands / confirmAll).
+ * settings.ts: confirmCommands / confirmAll always ask about the commands
+ * named there, and commandPolicy "ask" additionally asks about any command
+ * that is neither built in nor explicitly named in allowedCommands (as
+ * opposed to "whitelist", which refuses those outright, or "allow-all",
+ * which runs them without asking).
  *
  * pi's tool_call hook is awaited before the tool runs (see pi's own shipped
  * examples/extensions/permission-gate.ts), and ctx.ui.confirm() works
@@ -12,6 +16,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadSafeguardsSettings } from "./settings.ts";
+import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
 import { parseArgs, splitByPipes, splitStatements } from "./shell/parse.ts";
 
 /** Every program name a command string would invoke, including `cd`. */
@@ -49,8 +54,18 @@ export function registerConfirmGuard(pi: ExtensionAPI, settingsPath?: string): v
 		// loadSafeguardsSettings's own default parameter); production never passes it.
 		const settings = loadSafeguardsSettings(settingsPath);
 		const programs = programsIn(command);
+
+		// "ask": anything neither built in nor explicitly pre-approved (allowedCommands)
+		// gets a prompt here; execute.ts's dispatcher treats "ask" as unrestricted for
+		// commands that get this far, since by then the user has already approved it.
+		const isUnlisted = (program: string) =>
+			!(SUPPORTED_COMMANDS as readonly string[]).includes(program) && !settings.allowedCommands.includes(program);
+		const needsAskForUnlisted = settings.commandPolicy === "ask" && programs.some(isUnlisted);
+
 		const needsConfirmation =
-			settings.confirmAll || programs.some((program) => settings.confirmCommands.includes(program));
+			settings.confirmAll ||
+			programs.some((program) => settings.confirmCommands.includes(program)) ||
+			needsAskForUnlisted;
 		if (!needsConfirmation) return undefined;
 
 		// No host to ask means no way to get a real answer - fail closed rather

@@ -24,16 +24,22 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export type CommandPolicy = "whitelist" | "allow-all";
+export type CommandPolicy = "whitelist" | "ask" | "allow-all";
 
 export interface SafeguardsSettings {
 	/**
-	 * "whitelist" (default): only the built-in emulated commands, plus
-	 * anything named in allowedCommands, may run. "allow-all": any command
-	 * name is spawned via argv (still no real shell — no pipes/redirects/
-	 * subshells beyond what the emulator itself parses) — including the
-	 * interpreters normally refused (python, node, curl, sh, ...). This is a
-	 * deliberate escape hatch for a fully-trusted setup, not a safer default.
+	 * Governs any command that is neither one of the built-in emulated ones
+	 * nor named in allowedCommands:
+	 *   - "whitelist" (default): refused outright, no prompt. Fully autonomous,
+	 *     but limited to the built-in set plus whatever was named ahead of time.
+	 *   - "ask": prompted via the same confirm dialog as confirmCommands/
+	 *     confirmAll, run (via argv, no shell) only on approval. Interactive,
+	 *     but nothing runs unattended that was not explicitly pre-approved.
+	 *   - "allow-all": run immediately, no prompt — including the interpreters
+	 *     normally refused (python, node, curl, sh, ...). A deliberate escape
+	 *     hatch for a fully-trusted setup, not a safer default.
+	 * "ask" and "allow-all" both bypass the interpreter refusal in execute.ts;
+	 * they differ only in whether confirm-guard.ts asks first.
 	 */
 	commandPolicy: CommandPolicy;
 	/**
@@ -73,7 +79,8 @@ export function loadSafeguardsSettings(path: string = getSafeguardsJsonPath()): 
 		const raw = readFileSync(path, "utf8");
 		const parsed = JSON.parse(raw) as Partial<SafeguardsSettings>;
 		return {
-			commandPolicy: parsed.commandPolicy === "allow-all" ? "allow-all" : "whitelist",
+			commandPolicy:
+				parsed.commandPolicy === "allow-all" ? "allow-all" : parsed.commandPolicy === "ask" ? "ask" : "whitelist",
 			allowedCommands: Array.isArray(parsed.allowedCommands)
 				? parsed.allowedCommands.filter((c) => typeof c === "string")
 				: [],

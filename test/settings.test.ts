@@ -45,6 +45,11 @@ describe("loadSafeguardsSettings", () => {
 		expect(loadSafeguardsSettings(path).commandPolicy).toBe("whitelist");
 	});
 
+	it("accepts the ask commandPolicy", () => {
+		writeFileSync(path, JSON.stringify({ commandPolicy: "ask" }), "utf8");
+		expect(loadSafeguardsSettings(path).commandPolicy).toBe("ask");
+	});
+
 	it("ignores non-string entries in array fields instead of throwing", () => {
 		writeFileSync(
 			path,

@@ -104,4 +104,63 @@ describe("confirm guard", () => {
 		expect(result?.block).toBe(true);
 		expect(confirm).not.toHaveBeenCalled();
 	});
+
+	describe("ask policy", () => {
+		it("asks about a command that is neither built in nor allowed", async () => {
+			writeSettings({ commandPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("blocks the unlisted command on refusal", async () => {
+			writeSettings({ commandPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(false);
+			const result = await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
+		});
+
+		it("does not ask about a built-in command", async () => {
+			writeSettings({ commandPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("does not ask about a command already pre-approved via allowedCommands", async () => {
+			writeSettings({ commandPolicy: "ask", allowedCommands: ["npm"] });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("whitelist (the default) does not ask about unlisted commands - it just refuses them later", async () => {
+			writeSettings({ commandPolicy: "whitelist" });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("allow-all does not ask about unlisted commands - it just runs them", async () => {
+			writeSettings({ commandPolicy: "allow-all" });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "npm install" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("fails closed for an unlisted command with no UI to ask", async () => {
+			writeSettings({ commandPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("bash", { command: "npm install" }, { hasUI: false, ui: { confirm } });
+			expect(result?.block).toBe(true);
+			expect(confirm).not.toHaveBeenCalled();
+		});
+	});
 });

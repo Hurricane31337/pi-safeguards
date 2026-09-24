@@ -42,6 +42,9 @@ function describeCommandPolicy(): string {
 	if (settings.commandPolicy === "allow-all") {
 		return "Command policy: ALL commands are currently allowed to run (no whitelist), per user settings.";
 	}
+	if (settings.commandPolicy === "ask") {
+		return "Command policy: any command outside the built-in set may be attempted; the user will be asked to approve it before it runs, per user settings.";
+	}
 	if (settings.allowedCommands.length > 0) {
 		return `Additionally allowed by user settings: ${settings.allowedCommands.join(", ")}.`;
 	}
