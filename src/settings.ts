@@ -1,13 +1,23 @@
 /**
- * User-configurable policy for the bash emulator, read from
- * <agent config dir>/safeguards.json — the same directory pi itself keeps
- * models.json/auth.json/settings.json in (getAgentDir()), so this file lands
- * in the right place whether pi-safeguards runs standalone in a terminal or
- * inside the IDE, and follows the branded config-dir patches automatically.
+ * User-configurable policy for the bash emulator, read from safeguards.json.
  *
  * There is no pi-core API for extension settings (see pi-improved and
  * pi-label_intern for the same non-pattern); this is a hand-rolled file this
  * extension owns entirely, mirroring how the IDE already treats models.json.
+ *
+ * Location: PI_SAFEGUARDS_JSON_PATH when set, else <getAgentDir()>/safeguards.json.
+ * The env var exists because getAgentDir() is *not* aware of patch
+ * 0003-flat-config-layout (pi-IDE-Extensions Label/RepoChat branches): that
+ * patch moves models.json/auth.json/settings.json to a flat directory but
+ * leaves getAgentDir() itself returning the old nested .../agent/ path (see
+ * that patch's config.ts diff — getModelsPath()/getAuthPath() bypass
+ * getAgentDir() entirely, but nothing else does). Deriving the same
+ * branch-specific split independently here previously landed on the wrong
+ * directory on those two branches, silently no-opping every setting. The
+ * IDE host sets the env var to AgentPaths.SafeguardsJsonPath, which is
+ * already correct per branch; a terminal session has no host to set it and
+ * falls back to getAgentDir(), which is correct there since unpatched pi
+ * never runs under a branded config layout.
  */
 
 import { readFileSync } from "node:fs";
@@ -47,7 +57,7 @@ export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
 };
 
 export function getSafeguardsJsonPath(): string {
-	return join(getAgentDir(), "safeguards.json");
+	return process.env.PI_SAFEGUARDS_JSON_PATH || join(getAgentDir(), "safeguards.json");
 }
 
 /**
