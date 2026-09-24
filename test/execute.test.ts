@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_SAFEGUARDS_SETTINGS, type SafeguardsSettings } from "../src/settings.js";
 import { executeShellCommand } from "../src/shell/execute.js";
 
 let root: string;
@@ -23,6 +24,9 @@ afterAll(() => {
 });
 
 const run = (command: string) => executeShellCommand(command, root, root);
+const runWith = (command: string, overrides: Partial<SafeguardsSettings>) =>
+	executeShellCommand(command, root, root, { ...DEFAULT_SAFEGUARDS_SETTINGS, ...overrides });
+const node = `"${process.execPath}"`;
 
 describe("whitelist", () => {
 	it("runs the built-ins", () => {
@@ -164,5 +168,35 @@ describe("rm and mv", () => {
 		writeFileSync(join(root, "src", "escaping.txt"), "no\n", "utf8");
 		expect(run(`mv src/escaping.txt ${resolve(outsideFile, "..", "escaped.txt")}`)).toContain("Access denied");
 		run("rm src/escaping.txt");
+	});
+});
+
+describe("command policy", () => {
+	it("whitelist mode (the default) refuses a command outside the built-in set", () => {
+		expect(run(`${node} -e "console.log(1)"`)).toContain("wird nicht unterstuetzt");
+	});
+
+	it("whitelist mode still refuses a blocked interpreter by name", () => {
+		expect(run('node -e "1"')).toContain("ist nicht verfuegbar");
+	});
+
+	it("allow-all runs an arbitrary external command with no shell involved", () => {
+		expect(runWith(`${node} -e "console.log(1+1)"`, { commandPolicy: "allow-all" }).trim()).toBe("2");
+	});
+
+	it("allow-all lifts the interpreter refusal too", () => {
+		expect(runWith('node -e "console.log(2+2)"', { commandPolicy: "allow-all" }).trim()).toBe("4");
+	});
+
+	it("allowedCommands opts a specific external command in without allow-all", () => {
+		expect(runWith(`${node} -e "console.log(3+3)"`, { allowedCommands: [process.execPath] }).trim()).toBe("6");
+	});
+
+	it("allowedCommands overrides the interpreter refusal for exactly the named program", () => {
+		expect(runWith('node -e "console.log(4+4)"', { allowedCommands: ["node"] }).trim()).toBe("8");
+	});
+
+	it("naming one command in allowedCommands does not open the whole blocklist", () => {
+		expect(runWith('python -c "print(1)"', { allowedCommands: ["node"] })).toContain("ist nicht verfuegbar");
 	});
 });

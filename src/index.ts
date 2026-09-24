@@ -1,14 +1,18 @@
 /**
  * pi-safeguards — the containment layer, as one extension.
  *
- * Two things, both of them policy rather than behaviour:
+ * Three things, all of them policy rather than behaviour:
  *
  *   1. pi's built-in file tools are confined to the session's working
  *      directory (path-guard.ts).
- *   2. `bash` is replaced by a pure-Node emulator that can run exactly one
+ *   2. `bash` is replaced by a pure-Node emulator that by default runs only a
  *      whitelisted set of commands and no interpreter or shell (shell/), so
  *      there is no path from a tool call to arbitrary code execution — and no
- *      dependency on Unix utilities that Windows does not have.
+ *      dependency on Unix utilities that Windows does not have. That default
+ *      is itself configurable (settings.ts): a user can widen the whitelist,
+ *      or turn it off entirely, at their own risk.
+ *   3. Any bash command can be made to ask for confirmation before it runs
+ *      (confirm-guard.ts), independent of whether it is whitelisted.
  *
  * It lives outside pi-improved on purpose. pi-improved is installed globally
  * and therefore also loaded by developers' terminal sessions; these safeguards
@@ -20,6 +24,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { registerConfirmGuard } from "./confirm-guard.ts";
 import { registerPathGuard } from "./path-guard.ts";
 import { createEmulatedBashTool } from "./shell/tool.ts";
 
@@ -27,5 +32,6 @@ export default function piSafeguards(pi: ExtensionAPI, ctx?: ExtensionContext) {
 	const cwd = ctx?.cwd ?? process.cwd();
 
 	registerPathGuard(pi);
+	registerConfirmGuard(pi);
 	pi.registerTool(createEmulatedBashTool(cwd));
 }

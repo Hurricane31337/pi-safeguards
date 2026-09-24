@@ -9,6 +9,7 @@
 
 import { resolve } from "node:path";
 import { isOutside } from "../paths.ts";
+import { loadSafeguardsSettings, type SafeguardsSettings } from "../settings.ts";
 import {
 	execCat,
 	execFind,
@@ -21,6 +22,7 @@ import {
 	execTail,
 	execWc,
 } from "./commands.ts";
+import { execExternal } from "./external.ts";
 import { execGit } from "./git.ts";
 import { parseArgs, splitByPipes, splitStatements } from "./parse.ts";
 
@@ -73,7 +75,13 @@ const BLOCKED = new Set([
 	"Invoke-WebRequest",
 ]);
 
-function executeSegment(segment: string, cwd: string, root: string, stdin: string | null): string {
+function executeSegment(
+	segment: string,
+	cwd: string,
+	root: string,
+	stdin: string | null,
+	settings: SafeguardsSettings,
+): string {
 	// Redirections the emulator has no concept of; dropping them keeps the
 	// common "2>/dev/null" idiom from turning into a bogus argument.
 	const command = segment
@@ -87,7 +95,12 @@ function executeSegment(segment: string, cwd: string, root: string, stdin: strin
 	if (args.length === 0) return stdin ?? "";
 	const program = args[0];
 
-	if (BLOCKED.has(program)) {
+	// Naming a command in allowedCommands is an explicit per-command opt-in and
+	// wins even over the interpreter refusal below - that refusal exists to stop
+	// an unconsidered command from running, not to override a deliberate choice.
+	const explicitlyAllowed = settings.allowedCommands.includes(program);
+
+	if (BLOCKED.has(program) && !explicitlyAllowed && settings.commandPolicy !== "allow-all") {
 		return (
 			`[bash-emulator] '${program}' ist nicht verfuegbar.\n` +
 			`Verwende stattdessen die eingebauten Werkzeuge: ${SUPPORTED_COMMANDS.join(", ")}\n` +
@@ -129,6 +142,12 @@ function executeSegment(segment: string, cwd: string, root: string, stdin: strin
 			case "git":
 				return execGit(args, cwd, stdin);
 			default:
+				// Anything else: run for real, without a shell, only when settings
+				// say to - either this exact name was opted into, or every command
+				// is allowed. Otherwise it is simply not a command this emulator runs.
+				if (explicitlyAllowed || settings.commandPolicy === "allow-all") {
+					return execExternal(args, cwd, stdin);
+				}
 				return (
 					`[bash-emulator] '${program}' wird nicht unterstuetzt.\n` +
 					`Verfuegbar: ${SUPPORTED_COMMANDS.join(", ")}`
@@ -157,7 +176,14 @@ function unquote(text: string): string {
  * each tool invocation is re-anchored to the session's cwd (see tool.ts).
  * Within a statement, `|` chains segments through stdin as before.
  */
-export function executeShellCommand(input: string, cwd: string, root: string): string {
+export function executeShellCommand(
+	input: string,
+	cwd: string,
+	root: string,
+	// Overridable so tests can inject a policy without touching the real
+	// settings file; production callers (tool.ts) never pass this.
+	settings: SafeguardsSettings = loadSafeguardsSettings(),
+): string {
 	let workingDir = cwd;
 	const outputs: string[] = [];
 
@@ -177,7 +203,7 @@ export function executeShellCommand(input: string, cwd: string, root: string): s
 
 		let stdin: string | null = null;
 		for (const segment of splitByPipes(statement)) {
-			stdin = executeSegment(segment, workingDir, root, stdin);
+			stdin = executeSegment(segment, workingDir, root, stdin, settings);
 		}
 		if (stdin !== null) outputs.push(stdin);
 	}
