@@ -163,4 +163,68 @@ describe("confirm guard", () => {
 			expect(confirm).not.toHaveBeenCalled();
 		});
 	});
+
+	// grep/find/ls exist as both native pi tools and emulated bash commands; a
+	// model asked to search or list reaches for the native tool, not bash - so
+	// confirmCommands/confirmAll must also be checked against the native
+	// toolName directly, or "confirm before grep" would never fire in practice.
+	describe("native tools with a bash equivalent (grep, find, ls)", () => {
+		it("asks before the native grep tool when grep is in confirmCommands", async () => {
+			writeSettings({ confirmCommands: ["grep"] });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("grep", { pattern: "TODO", path: "." }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("asks before the native ls and find tools the same way", async () => {
+			writeSettings({ confirmCommands: ["ls", "find"] });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			await call("ls", { path: "." }, { hasUI: true, ui: { confirm } });
+			await call("find", { pattern: "*.ts" }, { hasUI: true, ui: { confirm } });
+			expect(confirm).toHaveBeenCalledTimes(2);
+		});
+
+		it("blocks the native tool call on refusal", async () => {
+			writeSettings({ confirmCommands: ["grep"] });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(false);
+			const result = await call("grep", { pattern: "secret" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
+		});
+
+		it("confirmAll covers the native tools too", async () => {
+			writeSettings({ confirmAll: true });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			await call("ls", { path: "." }, { hasUI: true, ui: { confirm } });
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("does not ask about a native tool not named in confirmCommands", async () => {
+			writeSettings({ confirmCommands: ["grep"] });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("ls", { path: "." }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("the ask commandPolicy does not affect native tools - they are not part of the bash whitelist", async () => {
+			writeSettings({ commandPolicy: "ask" });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("grep", { pattern: "x" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("fails closed for a native tool with no UI to ask", async () => {
+			writeSettings({ confirmCommands: ["grep"] });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("grep", { pattern: "x" }, { hasUI: false, ui: { confirm } });
+			expect(result?.block).toBe(true);
+			expect(confirm).not.toHaveBeenCalled();
+		});
+	});
 });
