@@ -38,7 +38,7 @@ describe("whitelist", () => {
 	});
 
 	it("refuses anything else it does not implement", () => {
-		expect(run("rm -rf /")).toContain("wird nicht unterstuetzt");
+		expect(run("touch foo")).toContain("wird nicht unterstuetzt");
 	});
 });
 
@@ -61,6 +61,31 @@ describe("path containment", () => {
 	it("ignores a cd that would leave the root", () => {
 		expect(run(`cd ${resolve(outsideFile, "..")} && pwd`)).toBe(root.replace(/\\/g, "/"));
 	});
+
+	it("ignores a standalone cd that would leave the root", () => {
+		expect(run(`cd ${resolve(outsideFile, "..")}\npwd`)).toBe(root.replace(/\\/g, "/"));
+	});
+});
+
+describe("statements", () => {
+	it("moves cd's effect to the rest of the line with &&", () => {
+		expect(run("cd src && pwd")).toBe(join(root, "src").replace(/\\/g, "/"));
+	});
+
+	it("applies a standalone cd to every later statement, on its own line or after ;", () => {
+		expect(run("cd src\npwd")).toBe(join(root, "src").replace(/\\/g, "/"));
+		expect(run("cd src; pwd")).toBe(join(root, "src").replace(/\\/g, "/"));
+	});
+
+	it("runs a real multi-line command and returns the non-cd output", () => {
+		expect(run("cd src\ncat a.txt")).toContain("alpha");
+	});
+
+	it("does not carry stdin across statement boundaries", () => {
+		// "cat a.txt" and "wc -l" are separate statements (;), not a pipe, so wc
+		// sees no stdin at all rather than a.txt's line count.
+		expect(run("cd src; cat a.txt; wc -l")).toBe("alpha\nbeta\ngamma\n\n0");
+	});
 });
 
 describe("pipes", () => {
@@ -69,6 +94,11 @@ describe("pipes", () => {
 		expect(run("cat src/a.txt | grep beta")).toBe("beta");
 		expect(run("cat src/a.txt | head -n 2")).toBe("alpha\nbeta");
 		expect(run("cat src/a.txt | tail -n 2").trim()).toBe("beta\ngamma");
+	});
+
+	it("counts zero lines for empty stdin, not one (find with no matches | wc -l)", () => {
+		expect(run("find src -name *.nope | wc -l").trim()).toBe("0");
+		expect(run("grep -l nomatch src/a.txt | wc -l").trim()).toBe("0");
 	});
 });
 
@@ -82,5 +112,57 @@ describe("search", () => {
 	it("finds by name and type", () => {
 		expect(run("find src -name *.log")).toContain("b.log");
 		expect(run("find src -name *.log")).not.toContain("a.txt");
+	});
+});
+
+describe("glob expansion", () => {
+	it("expands a wildcard to explicit filenames for wc", () => {
+		const output = run("wc -l src/*.log");
+		expect(output).toContain("src/b.log");
+		expect(output).not.toContain("*.log");
+	});
+
+	it("leaves a glob that matches nothing untouched, as a literal", () => {
+		expect(run("wc -l src/*.nope")).toContain("No such file or directory");
+	});
+});
+
+describe("rm and mv", () => {
+	it("removes a file inside the root", () => {
+		writeFileSync(join(root, "src", "doomed.txt"), "bye\n", "utf8");
+		expect(run("rm src/doomed.txt")).toBe("");
+		expect(run("cat src/doomed.txt")).toContain("No such file or directory");
+	});
+
+	it("refuses to remove a file outside the root, even with -f", () => {
+		expect(run(`rm ${outsideFile}`)).toContain("Access denied");
+		expect(run(`rm -f ${outsideFile}`)).toBe("");
+	});
+
+	it("refuses a directory without -r", () => {
+		mkdirSync(join(root, "src", "doomed-dir"));
+		expect(run("rm src/doomed-dir")).toContain("Is a directory");
+		expect(run("rm -r src/doomed-dir")).toBe("");
+	});
+
+	it("removes a glob's matches", () => {
+		writeFileSync(join(root, "src", "a.tmp"), "", "utf8");
+		writeFileSync(join(root, "src", "b.tmp"), "", "utf8");
+		expect(run("rm src/*.tmp")).toBe("");
+		expect(run("find src -name *.tmp")).toBe("");
+	});
+
+	it("moves a file inside the root", () => {
+		writeFileSync(join(root, "src", "from.txt"), "moved\n", "utf8");
+		expect(run("mv src/from.txt src/to.txt")).toBe("");
+		expect(run("cat src/to.txt")).toContain("moved");
+		run("rm src/to.txt");
+	});
+
+	it("refuses to move a file outside the root, in either direction", () => {
+		expect(run(`mv ${outsideFile} src/stolen.txt`)).toContain("Access denied");
+		writeFileSync(join(root, "src", "escaping.txt"), "no\n", "utf8");
+		expect(run(`mv src/escaping.txt ${resolve(outsideFile, "..", "escaped.txt")}`)).toContain("Access denied");
+		run("rm src/escaping.txt");
 	});
 });

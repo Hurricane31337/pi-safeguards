@@ -9,9 +9,20 @@
 
 import { resolve } from "node:path";
 import { isOutside } from "../paths.ts";
-import { execCat, execFind, execGrep, execHead, execLs, execSed, execTail, execWc } from "./commands.ts";
+import {
+	execCat,
+	execFind,
+	execGrep,
+	execHead,
+	execLs,
+	execMv,
+	execRm,
+	execSed,
+	execTail,
+	execWc,
+} from "./commands.ts";
 import { execGit } from "./git.ts";
-import { parseArgs, splitByPipes } from "./parse.ts";
+import { parseArgs, splitByPipes, splitStatements } from "./parse.ts";
 
 /** Commands available in the emulator, for the tool description and the refusal message. */
 export const SUPPORTED_COMMANDS = [
@@ -25,6 +36,9 @@ export const SUPPORTED_COMMANDS = [
 	"ls",
 	"echo",
 	"pwd",
+	"cd",
+	"rm",
+	"mv",
 	"git",
 ] as const;
 
@@ -99,6 +113,10 @@ function executeSegment(segment: string, cwd: string, root: string, stdin: strin
 				return execCat(args, cwd, root);
 			case "ls":
 				return execLs(args, cwd, root);
+			case "rm":
+				return execRm(args, cwd, root);
+			case "mv":
+				return execMv(args, cwd, root);
 			case "echo":
 				return args.slice(1).join(" ");
 			case "pwd":
@@ -121,24 +139,48 @@ function executeSegment(segment: string, cwd: string, root: string, stdin: strin
 	}
 }
 
+/** Strip one matching pair of surrounding quotes, e.g. from `cd "My Dir"`. */
+function unquote(text: string): string {
+	if (text.length >= 2) {
+		const first = text[0];
+		const last = text[text.length - 1];
+		if ((first === '"' || first === "'") && first === last) return text.slice(1, -1);
+	}
+	return text;
+}
+
 /**
- * Execute a full command string. Supports `cd DIR && rest` (the cd applies to
- * the rest of the line) and `|` chaining; everything else is a single segment.
+ * Execute a full command string. Statements are split on `;`, newlines and
+ * `&&` (see splitStatements); `cd DIR` changes the working directory for every
+ * statement after it in the same call — this is the only state the emulator
+ * carries between statements, and it never survives past this one call, since
+ * each tool invocation is re-anchored to the session's cwd (see tool.ts).
+ * Within a statement, `|` chains segments through stdin as before.
  */
 export function executeShellCommand(input: string, cwd: string, root: string): string {
-	let command = input.trim().replace(/;$/, "");
 	let workingDir = cwd;
+	const outputs: string[] = [];
 
-	const cdAnd = command.match(/^cd\s+(.+?)\s+&&\s+(.+)$/s);
-	if (cdAnd) {
-		const target = resolve(workingDir, cdAnd[1].trim());
-		if (!isOutside(target, root)) workingDir = target;
-		command = cdAnd[2];
+	for (const statement of splitStatements(input)) {
+		const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
+		if (cdMatch) {
+			const arg = unquote((cdMatch[1] ?? "").trim());
+			if (arg) {
+				const target = resolve(workingDir, arg);
+				// Silently ignored, like a `cd` that would leave the root always was:
+				// the model gets an unrelated tool call to explain the containment,
+				// not this one, since a refusal message here quotes the walked path.
+				if (!isOutside(target, root)) workingDir = target;
+			}
+			continue;
+		}
+
+		let stdin: string | null = null;
+		for (const segment of splitByPipes(statement)) {
+			stdin = executeSegment(segment, workingDir, root, stdin);
+		}
+		if (stdin !== null) outputs.push(stdin);
 	}
 
-	let result: string | null = null;
-	for (const segment of splitByPipes(command)) {
-		result = executeSegment(segment, workingDir, root, result);
-	}
-	return result ?? "";
+	return outputs.join("\n");
 }

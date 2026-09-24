@@ -8,6 +8,38 @@
 
 const isWindows = process.platform === "win32";
 
+/**
+ * Split a command string into statements on `;`, newlines and `&&`, respecting
+ * quotes. The emulator has no exit codes to gate on, so `&&` is treated as a
+ * plain separator like `;` rather than "run only if the previous succeeded".
+ * This is what lets `cd DIR && rest` and `cd DIR\nrest` both work, and lets a
+ * standalone `cd DIR` change the working directory for the statements after it.
+ */
+export function splitStatements(command: string): string[] {
+	const parts: string[] = [];
+	let current = "";
+	let inSingle = false;
+	let inDouble = false;
+	for (let i = 0; i < command.length; i++) {
+		const char = command[i];
+		if (char === "'" && !inDouble) inSingle = !inSingle;
+		else if (char === '"' && !inSingle) inDouble = !inDouble;
+		else if ((char === "\n" || char === ";") && !inSingle && !inDouble) {
+			parts.push(current);
+			current = "";
+			continue;
+		} else if (char === "&" && command[i + 1] === "&" && !inSingle && !inDouble) {
+			parts.push(current);
+			current = "";
+			i++;
+			continue;
+		}
+		current += char;
+	}
+	parts.push(current);
+	return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
 /** Split a command string on `|`, respecting single and double quotes. */
 export function splitByPipes(command: string): string[] {
 	const parts: string[] = [];

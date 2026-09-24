@@ -8,10 +8,54 @@
  * reading a path we did not resolve ourselves.
  */
 
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { type Dirent, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { isBlocked, isOutside, isSpilled } from "../paths.ts";
 import { globToRegex, parseLineCount } from "./parse.ts";
+
+/**
+ * Expand a single glob argument (`*.py`) against the directory it names,
+ * relative to `cwd`. A pattern with no glob characters, or one that matches
+ * nothing, is returned unchanged — the same "stays literal" fallback a real
+ * shell has, and what lets error messages still name the argument the model
+ * wrote.
+ */
+function expandGlob(pattern: string, cwd: string): string[] {
+	if (!/[*?]/.test(pattern)) return [pattern];
+
+	const full = resolve(cwd, pattern);
+	const dir = dirname(full);
+	const regex = globToRegex(basename(full));
+
+	let entries: string[];
+	try {
+		entries = readdirSync(dir);
+	} catch {
+		return [pattern];
+	}
+
+	const matches = entries.filter((entry) => regex.test(entry)).sort();
+	if (matches.length === 0) return [pattern];
+
+	const dirArg = dirname(pattern);
+	return matches.map((match) => (dirArg === "." ? match : `${dirArg}/${match}`));
+}
+
+/** Expand every non-flag argument's glob, in place order. */
+function expandArgs(args: string[], cwd: string): string[] {
+	const result: string[] = [];
+	for (const arg of args) {
+		if (arg.startsWith("-")) result.push(arg);
+		else result.push(...expandGlob(arg, cwd));
+	}
+	return result;
+}
+
+/** Line count that treats "" as zero lines, matching real `wc -l` (`split("\n")` alone is off by one on empty input). */
+function countLines(text: string): number {
+	if (text === "") return 0;
+	return text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+}
 
 /**
  * Read a file as latin1 so Windows-1252 sources survive the round trip; the
@@ -168,7 +212,7 @@ export function execSed(args: string[], cwd: string, root: string, stdin: string
 }
 
 export function execWc(args: string[], cwd: string, root: string, stdin: string | null): string {
-	const files = args.slice(1).filter((arg) => !arg.startsWith("-"));
+	const files = expandArgs(args.slice(1), cwd).filter((arg) => !arg.startsWith("-"));
 
 	if (files.length > 0) {
 		const rows: string[] = [];
@@ -184,7 +228,7 @@ export function execWc(args: string[], cwd: string, root: string, stdin: string 
 				rows.push(`wc: ${file}: No such file or directory`);
 				continue;
 			}
-			const count = content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
+			const count = countLines(content);
 			total += count;
 			rows.push(`${String(count).padStart(8)} ${file}`);
 		}
@@ -192,7 +236,7 @@ export function execWc(args: string[], cwd: string, root: string, stdin: string 
 		return rows.join("\n");
 	}
 	if (stdin !== null) {
-		return String(stdin.split("\n").length - (stdin.endsWith("\n") ? 1 : 0)).padStart(8);
+		return String(countLines(stdin)).padStart(8);
 	}
 	return "0";
 }
@@ -281,4 +325,84 @@ export function execLs(args: string[], cwd: string, root: string): string {
 	} catch {
 		return `ls: ${target ?? "."}: No such file or directory`;
 	}
+}
+
+/** `-r`/`-R` recurses into directories, `-f` silences missing/blocked targets. */
+export function execRm(args: string[], cwd: string, root: string): string {
+	let recursive = false;
+	let force = false;
+	const targets: string[] = [];
+
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of arg.slice(1)) {
+				if (flag === "r" || flag === "R") recursive = true;
+				else if (flag === "f") force = true;
+			}
+		} else targets.push(arg);
+	}
+	if (targets.length === 0) return force ? "" : "rm: missing operand";
+
+	const rows: string[] = [];
+	for (const target of expandArgs(targets, cwd)) {
+		const path = resolve(cwd, target);
+		if (isBlocked(path, root)) {
+			if (!force) rows.push(`Access denied: "${target}" is outside the project directory.`);
+			continue;
+		}
+		try {
+			const stat = statSync(path);
+			if (stat.isDirectory() && !recursive) {
+				rows.push(`rm: cannot remove '${target}': Is a directory`);
+				continue;
+			}
+			rmSync(path, { recursive, force });
+		} catch (error) {
+			if (!force) rows.push(`rm: cannot remove '${target}': ${(error as Error).message}`);
+		}
+	}
+	return rows.join("\n");
+}
+
+/** Single source -> dest, or multiple sources -> an existing directory. No flags. */
+export function execMv(args: string[], cwd: string, root: string): string {
+	const positional = expandArgs(
+		args.slice(1).filter((arg) => !arg.startsWith("-")),
+		cwd,
+	);
+	if (positional.length < 2) return "mv: missing file operand";
+
+	const dest = positional[positional.length - 1];
+	const sources = positional.slice(0, -1);
+	const destPath = resolve(cwd, dest);
+	if (isBlocked(destPath, root)) return `Access denied: "${dest}" is outside the project directory.`;
+
+	let destIsDir = false;
+	try {
+		destIsDir = statSync(destPath).isDirectory();
+	} catch {
+		destIsDir = false;
+	}
+	if (sources.length > 1 && !destIsDir) return `mv: target '${dest}' is not a directory`;
+
+	const rows: string[] = [];
+	for (const source of sources) {
+		const sourcePath = resolve(cwd, source);
+		if (isBlocked(sourcePath, root)) {
+			rows.push(`Access denied: "${source}" is outside the project directory.`);
+			continue;
+		}
+		const targetPath = destIsDir ? join(destPath, basename(sourcePath)) : destPath;
+		if (isBlocked(targetPath, root)) {
+			rows.push(`Access denied: "${dest}" is outside the project directory.`);
+			continue;
+		}
+		try {
+			renameSync(sourcePath, targetPath);
+		} catch (error) {
+			rows.push(`mv: cannot move '${source}' to '${dest}': ${(error as Error).message}`);
+		}
+	}
+	return rows.join("\n");
 }

@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { globToRegex, parseArgs, parseLineCount, splitByPipes } from "../src/shell/parse.js";
+import { globToRegex, parseArgs, parseLineCount, splitByPipes, splitStatements } from "../src/shell/parse.js";
+
+describe("splitStatements", () => {
+	it("splits on semicolons, newlines and &&", () => {
+		expect(splitStatements("cd src; pwd")).toEqual(["cd src", "pwd"]);
+		expect(splitStatements("cd src\npwd")).toEqual(["cd src", "pwd"]);
+		expect(splitStatements("cd src && pwd")).toEqual(["cd src", "pwd"]);
+	});
+
+	it("keeps separators inside quotes", () => {
+		expect(splitStatements(`echo "a;b"`)).toEqual([`echo "a;b"`]);
+		expect(splitStatements("echo 'a && b'")).toEqual(["echo 'a && b'"]);
+	});
+
+	it("drops empty statements", () => {
+		expect(splitStatements("cd src;; pwd\n\n")).toEqual(["cd src", "pwd"]);
+	});
+});
 
 describe("splitByPipes", () => {
 	it("splits on unquoted pipes and trims", () => {
