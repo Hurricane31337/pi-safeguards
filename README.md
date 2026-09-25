@@ -9,9 +9,16 @@ Two things, both **policy** rather than behaviour:
 | pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
 
-Supported commands: `grep [-rnilvc] [-e PATTERN]...` (`-c` with an empty pattern counts every line,
-like real `grep -c ""`; `\(` `\)` `\{` `\}` `\|` `\+` `\?` act as the special ERE form even without
-`-E`, like real BRE grep; repeating `-e` ORs the patterns together), `sed -n 'X,Yp'`, `wc -l`,
+Supported commands: `grep [-rnilvcowqhH] [-e PATTERN]... [-m N] [--include=GLOB] [--exclude-dir=GLOB]`
+(`-c` with an empty pattern counts every line, like real `grep -c ""`; `\(` `\)` `\{` `\}` `\|` `\+`
+`\?` act as the special ERE form even without `-E`, like real BRE grep; repeating `-e` ORs the
+patterns together; `-m`/`--max-count` stops after N matching lines per file, `-c` then reporting the
+counted rather than the actual total; `-A`/`-B`/`-C` context lines are not implemented and fail with
+`grep: unsupported option: -A` rather than being silently ignored; file content is decoded as UTF-8
+(BOM-sniffed, BOM stripped so `^` still anchors) with a latin1/Windows-1252 fallback only for bytes
+that are not valid UTF-8 (the ripgrep fast path, `ripgrep.ts`, decodes natively and needs none of
+this); a binary file reports `grep: <path>: binary file matches` instead of dumping raw bytes, while
+`-l`/`-c` still answer normally for it), `sed -n 'X,Yp'`, `wc -l`,
 `uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`, `printf 'fmt' [args...]` (`\n`/`\t` escapes and
 `%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating the format over extra args like real `printf`),
 `head -n`, `tail -n` (both accept one or more file arguments, or stdin, with an `==> name <==` header

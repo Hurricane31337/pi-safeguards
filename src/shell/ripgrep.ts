@@ -61,6 +61,8 @@ export interface RipgrepGrepOptions {
 	excludeDirGlob: string | null;
 	/** Whether to prefix each match with its file path - commands.ts's own showFile, honoring -h/-H. */
 	showFile: boolean;
+	/** `-m`/`--max-count`: stop after this many matching lines, per file. null means unlimited. */
+	maxCount: number | null;
 }
 
 interface RgMatchEvent {
@@ -112,6 +114,7 @@ export function execRipgrepGrep(
 	else args.push("--json");
 	if (options.ignoreCase) args.push("--ignore-case");
 	if (options.invert) args.push("--invert-match");
+	if (options.maxCount !== null) args.push("--max-count", String(options.maxCount));
 	args.push("-e", patternSource, "--", ...targets);
 
 	let result: ReturnType<typeof spawnSync>;
@@ -144,6 +147,14 @@ export function execRipgrepGrep(
 		try {
 			event = JSON.parse(line);
 		} catch {
+			continue;
+		}
+		// rg's own binary detection (a NUL byte in the leading block) reports a
+		// "binary" event instead of "match" - surfaced the same way
+		// grepInPath's JS walk reports it, so a caller sees identical output
+		// whichever path actually ran the search.
+		if (event.type === "binary") {
+			output.push(`grep: ./${relative(root, event.data.path.text).replace(/\\/g, "/")}: binary file matches`);
 			continue;
 		}
 		if (event.type !== "match") continue;

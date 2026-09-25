@@ -8,7 +8,17 @@
  * reading a path we did not resolve ourselves.
  */
 
-import { type Dirent, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+	closeSync,
+	type Dirent,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isBlocked, isOutside, isSpilled } from "../paths.ts";
 import { globToRegex, parseLineCount } from "./parse.ts";
@@ -77,13 +87,81 @@ function countLines(text: string): number {
 }
 
 /**
- * Read a file as latin1 so Windows-1252 sources survive the round trip; the
- * temp logs we spilled ourselves are UTF-8. (Encoding-correct reading and
- * writing of source files is pi-improved's job — this is only for grep/cat.)
+ * Decode a file's raw bytes for grep/cat/etc. Real source trees mix UTF-8
+ * (with or without a BOM) and legacy Windows-1252 - this used to assume
+ * latin1 unconditionally, which is a no-op on ASCII but silently mangles
+ * every UTF-8 multi-byte sequence into two-or-three garbage latin1
+ * characters (`für` -> `fÃ¼r`), and made every non-ASCII grep pattern match
+ * zero lines since the pattern itself (already a correct JS string) was
+ * compared against that mangled text. Detection order, matching what a real
+ * text editor does: a UTF-16 BOM is unambiguous and decoded as such; a UTF-8
+ * BOM is unambiguous and decoded as UTF-8; with no BOM, a buffer that
+ * round-trips cleanly through UTF-8 is almost certainly UTF-8 (Windows-1252
+ * bytes 0x80-0x9F/0xFF are not valid UTF-8 continuation patterns in the vast
+ * majority of real text), so only a buffer that fails that round-trip falls
+ * back to latin1 (a byte-for-byte stand-in for Windows-1252 on the ASCII
+ * range this project mostly cares about). The BOM itself is stripped so a
+ * `^` anchor still matches the true first line and callers never print it.
+ */
+function decodeFileBuffer(buffer: Buffer): string {
+	if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+		return buffer.toString("utf8", 3);
+	}
+	if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+		return buffer.toString("utf16le", 2);
+	}
+	if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+		const swapped = Buffer.from(buffer.subarray(2));
+		swapped.swap16();
+		return swapped.toString("utf16le");
+	}
+	const asUtf8 = buffer.toString("utf8");
+	if (Buffer.from(asUtf8, "utf8").equals(buffer)) return asUtf8;
+	return buffer.toString("latin1");
+}
+
+/** First 8KB, sniffed for a NUL byte - the same binary heuristic GNU grep/git use. */
+const BINARY_SNIFF_BYTES = 8192;
+
+/**
+ * True when the file's leading bytes contain a NUL, i.e. it is not text. A
+ * leading UTF-8/UTF-16 BOM is decided as text unconditionally and skips the
+ * NUL sniff entirely - UTF-16 text is full of NUL bytes (every ASCII
+ * character's high byte) and would otherwise be misclassified as binary.
+ */
+export function isBinaryFile(path: string): boolean {
+	let fd: number;
+	try {
+		fd = openSync(path, "r");
+	} catch {
+		return false;
+	}
+	try {
+		const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
+		const bytesRead = readSync(fd, buffer, 0, BINARY_SNIFF_BYTES, 0);
+		const sniffed = buffer.subarray(0, bytesRead);
+		const hasBom =
+			(sniffed.length >= 3 && sniffed[0] === 0xef && sniffed[1] === 0xbb && sniffed[2] === 0xbf) ||
+			(sniffed.length >= 2 && sniffed[0] === 0xff && sniffed[1] === 0xfe) ||
+			(sniffed.length >= 2 && sniffed[0] === 0xfe && sniffed[1] === 0xff);
+		if (hasBom) return false;
+		return sniffed.includes(0);
+	} catch {
+		return false;
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/**
+ * Read a file's text content, decoding source files with `decodeFileBuffer`
+ * and the temp logs we spilled ourselves as plain UTF-8 (they are only ever
+ * written by this extension, never a developer's own encoding).
  */
 export function readFileSafe(path: string): string | null {
 	try {
-		return readFileSync(path, isSpilled(path) ? "utf8" : "latin1");
+		if (isSpilled(path)) return readFileSync(path, "utf8");
+		return decodeFileBuffer(readFileSync(path));
 	} catch {
 		return null;
 	}
@@ -96,6 +174,8 @@ interface GrepFlags {
 	invert: boolean;
 	countOnly: boolean;
 	onlyMatching: boolean;
+	/** `-m`/`--max-count`: stop after this many matching lines, per file. null means unlimited. */
+	maxCount: number | null;
 }
 
 function grepInPath(
@@ -158,6 +238,12 @@ function grepInPath(
 	if (includeGlob && !includeGlob.test(basename(path))) return;
 	if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return;
 
+	// GNU grep's own binary heuristic: a NUL byte in the leading block means
+	// "not text". -l/-c still need a real answer (does/how-many-times a
+	// binary file match), so this doesn't short-circuit before reading the
+	// content below - it only changes what gets printed for a match.
+	const binary = isBinaryFile(path);
+
 	const content = readFileSafe(path);
 	if (!content) return;
 	const lines = content.split("\n");
@@ -170,6 +256,8 @@ function grepInPath(
 
 	// -l wins over -c when both are given, like real grep (this used to check
 	// countOnly first, so `grep -lc` printed counts instead of just names).
+	// Binary status never changes -l/-c - a binary file matches or doesn't
+	// and has a count exactly like a text one, the same way real grep behaves.
 	if (flags.filesOnly) {
 		if (lines.some(isMatch)) results.push(rel);
 		return;
@@ -177,13 +265,27 @@ function grepInPath(
 
 	if (flags.countOnly) {
 		let count = 0;
-		for (const line of lines) if (isMatch(line)) count++;
+		for (const line of lines) {
+			if (flags.maxCount !== null && count >= flags.maxCount) break;
+			if (isMatch(line)) count++;
+		}
 		results.push(showFile ? `${rel}:${count}` : String(count));
 		return;
 	}
 
+	// A binary match prints GNU grep's own one-line notice instead of the raw
+	// (likely NUL-laden, multi-megabyte) content - the content itself is
+	// never emitted for a binary file outside -l/-c.
+	if (binary) {
+		if (lines.some(isMatch)) results.push(`grep: ${rel}: binary file matches`);
+		return;
+	}
+
+	let printed = 0;
 	for (let i = 0; i < lines.length; i++) {
+		if (flags.maxCount !== null && printed >= flags.maxCount) break;
 		if (!isMatch(lines[i])) continue;
+		printed++;
 		if (flags.onlyMatching) {
 			for (const match of lines[i].matchAll(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))) {
 				let line = "";
@@ -242,11 +344,13 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		invert: false,
 		countOnly: false,
 		onlyMatching: false,
+		maxCount: null,
 	};
 	let ignoreCase = false;
 	let extendedRegex = false;
 	let wordBoundary = false;
 	let quiet = false;
+	let unsupportedOption: string | null = null;
 	// "auto" is the existing recursive-or-multi-file heuristic; -h/-H pin it
 	// either way regardless of target count, like real grep.
 	let filenamePrefix: "auto" | "always" | "never" = "auto";
@@ -287,18 +391,36 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			wordBoundary = true;
 			continue;
 		}
-		// -A/-B/-C (context lines) and -m (max count) are not implemented, but
-		// their numeric operand must still be consumed here - otherwise it falls
-		// through to the generic parser below as an unrecognised flag (a no-op,
-		// correctly) followed by a bare number, which then gets read as the
-		// search PATTERN (`grep -m 1 foo file` searched for "1", not "foo", and
-		// silently listed "foo" as a second file). Matches both `-A 2` and the
-		// attached `-A2` form real grep also accepts.
-		if (/^-[ABCm]$/.test(arg) && i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+		// -m/--max-count is implemented (below); -A/-B/-C (context lines) are
+		// not, and silently swallowing them used to make a caller typing `-C 3`
+		// believe it got context when it got an unfiltered dump instead - so
+		// they're now a visible, immediate error rather than a silent no-op.
+		// Matches both `-A 2` and the attached `-A2` form real grep accepts.
+		if (arg === "--max-count" && i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+			flags.maxCount = Number.parseInt(args[++i], 10);
+			continue;
+		}
+		if (arg.startsWith("--max-count=") && /^\d+$/.test(arg.slice("--max-count=".length))) {
+			flags.maxCount = Number.parseInt(arg.slice("--max-count=".length), 10);
+			continue;
+		}
+		if (arg === "-m" && i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+			flags.maxCount = Number.parseInt(args[++i], 10);
+			continue;
+		}
+		if (/^-m\d+$/.test(arg)) {
+			flags.maxCount = Number.parseInt(arg.slice(2), 10);
+			continue;
+		}
+		if (/^-[ABC]$/.test(arg) && i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+			unsupportedOption ??= arg;
 			i++;
 			continue;
 		}
-		if (/^-[ABCm]\d+$/.test(arg)) continue;
+		if (/^-[ABC]\d+$/.test(arg)) {
+			unsupportedOption ??= arg.slice(0, 2);
+			continue;
+		}
 		if (arg.startsWith("-") && arg !== "-") {
 			for (const flag of shortFlags(arg)) {
 				if (flag === "r" || flag === "R") flags.recursive = true;
@@ -320,6 +442,8 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			positionalPatternTaken = true;
 		} else targets.push(resolve(cwd, arg));
 	}
+
+	if (unsupportedOption) return `grep: unsupported option: ${unsupportedOption}`;
 
 	// No patterns at all (never a bare "-e", never a positional one) means no
 	// pattern was given; an explicitly empty pattern ("" from -e or as the
@@ -358,13 +482,17 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		if (flags.countOnly) {
 			let count = 0;
 			for (const line of lines) {
+				if (flags.maxCount !== null && count >= flags.maxCount) break;
 				if (regex.test(line) === flags.invert) continue;
 				count++;
 			}
 			return quiet ? "" : String(count);
 		}
+		let printed = 0;
 		for (let i = 0; i < lines.length; i++) {
+			if (flags.maxCount !== null && printed >= flags.maxCount) break;
 			if (regex.test(lines[i]) === flags.invert) continue;
+			printed++;
 			if (flags.onlyMatching) {
 				for (const match of lines[i].matchAll(new RegExp(regex.source, `${regex.flags.replace("g", "")}g`))) {
 					results.push(flags.lineNumbers ? `${i + 1}:${match[0]}` : match[0]);
@@ -398,6 +526,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 					includeGlob: includeGlobText,
 					excludeDirGlob: excludeDirGlobText,
 					showFile,
+					maxCount: flags.maxCount,
 				});
 				if (fast !== null) {
 					results.push(...fast);

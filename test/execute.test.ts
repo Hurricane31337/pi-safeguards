@@ -14,6 +14,17 @@ beforeAll(() => {
 	writeFileSync(join(root, "src", "a.txt"), "alpha\nbeta\ngamma\n", "utf8");
 	writeFileSync(join(root, "src", "b.log"), "beta only\n", "utf8");
 	writeFileSync(join(root, "src", "dupes.txt"), "a\na\nb\na\n", "utf8");
+	const utf8Body = "Option Strict On\nfür Sanität\nfür alle\nfür dich\n";
+	writeFileSync(join(root, "src", "utf8_nobom.txt"), utf8Body, "utf8");
+	writeFileSync(
+		join(root, "src", "utf8_bom.txt"),
+		Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(utf8Body, "utf8")]),
+	);
+	// A real Windows-1252 file: "für" encoded with a single 0xFC byte (ü), not
+	// the two-byte 0xC3 0xBC a UTF-8 encoder would produce - that's exactly
+	// what makes it invalid UTF-8 and forces the latin1 fallback.
+	writeFileSync(join(root, "src", "cp1252.txt"), Buffer.from([0x66, 0xfc, 0x72, 0x0a]));
+	writeFileSync(join(root, "src", "binary.dat"), Buffer.from([0x4c, 0x61, 0x62, 0x65, 0x6c, 0x00, 0x01, 0x02, 0x03]));
 
 	outsideFile = join(mkdtempSync(join(tmpdir(), "safeguards-outside-")), "secret.txt");
 	writeFileSync(outsideFile, "do not read me\n", "utf8");
@@ -280,22 +291,73 @@ describe("search", () => {
 		expect(run("grep --word-regexp alpha src/a.txt")).toBe("alpha");
 	});
 
-	// -A/-B/-C (context) and -m (max count) aren't implemented, but their
-	// numeric operand must not leak into pattern/target parsing - it used to
-	// fall through as a bare positional, becoming the search pattern itself
-	// while the real pattern was silently read as a (missing) filename.
-	it("-m/-A/-B/-C consume their numeric operand instead of it becoming the pattern", () => {
-		expect(run("grep -m 1 beta src/a.txt")).toBe("beta");
-		expect(run("grep -A 1 beta src/a.txt")).toBe("beta");
-		expect(run("grep -B 1 beta src/a.txt")).toBe("beta");
-		expect(run("grep -C 1 beta src/a.txt")).toBe("beta");
-		expect(run("grep -A2 beta src/a.txt")).toBe("beta");
+	// -m (max count) is implemented; -A/-B/-C (context) are not, and now fail
+	// visibly instead of being silently swallowed - a caller typing `-C 3`
+	// used to get an unfiltered dump with no indication context was ignored.
+	it("-m limits matching lines per file; -A/-B/-C fail visibly instead of being silently ignored", () => {
+		expect(run("grep -m 1 beta src/dupes.txt")).toBe("");
+		expect(run("grep -m 2 a src/dupes.txt")).toBe("a\na");
+		expect(run("grep --max-count=2 a src/dupes.txt")).toBe("a\na");
+		expect(run("grep -m2 a src/dupes.txt")).toBe("a\na");
+		expect(run("grep -m 2 -c a src/dupes.txt")).toBe("2");
+		expect(run("grep -A 1 beta src/a.txt")).toBe("grep: unsupported option: -A");
+		expect(run("grep -B 1 beta src/a.txt")).toBe("grep: unsupported option: -B");
+		expect(run("grep -C 1 beta src/a.txt")).toBe("grep: unsupported option: -C");
+		expect(run("grep -A2 beta src/a.txt")).toBe("grep: unsupported option: -A");
 	});
 
 	// -l wins over -c when both are given, like real grep - this used to
 	// check -c first, so `grep -lc` printed a count instead of just the name.
 	it("-l wins over -c when both are given", () => {
 		expect(run("grep -lc beta src/a.txt")).toBe("./src/a.txt");
+	});
+
+	// readFileSafe used to decode every file as latin1 unconditionally, which
+	// silently mangled UTF-8 multi-byte sequences into garbage and made every
+	// non-ASCII pattern match zero lines - "no matches" looked like a real
+	// answer while being wrong. These pin the fix: UTF-8 (with and without a
+	// BOM), the BOM stripped so `^` still anchors to the true first line, and
+	// a genuine Windows-1252 file still readable via the latin1 fallback.
+	describe("file content is decoded as UTF-8, not latin1", () => {
+		it("matches a UTF-8 pattern with no BOM", () => {
+			expect(run('grep -c "für" src/utf8_nobom.txt')).toBe("3");
+		});
+		it("matches a UTF-8 pattern with a BOM", () => {
+			expect(run('grep -c "für" src/utf8_bom.txt')).toBe("3");
+		});
+		it("strips the BOM so ^ anchors to the true first line", () => {
+			expect(run('grep -c "^Option Strict On" src/utf8_bom.txt')).toBe("1");
+			expect(run('grep -c "^Option Strict On" src/utf8_nobom.txt')).toBe("1");
+		});
+		it("prints matched lines readably, without mojibake", () => {
+			expect(run('grep "für" src/utf8_bom.txt')).toBe("für Sanität\nfür alle\nfür dich");
+		});
+		it("does not regress plain ASCII matching on a BOM'd file", () => {
+			expect(run('grep -c "Option Strict" src/utf8_bom.txt')).toBe("1");
+		});
+		it("falls back to latin1 for a genuine Windows-1252 byte sequence invalid as UTF-8", () => {
+			expect(run('grep -c "für" src/cp1252.txt')).toBe("1");
+		});
+	});
+
+	// GNU-grep-compatible binary handling: no raw byte dump, but -l/-c still
+	// answer correctly. This used to have no binary detection at all, so a
+	// match inside a binary file dumped raw NULs/control bytes as output.
+	describe("binary file detection", () => {
+		it("reports a binary match without dumping raw content", () => {
+			expect(run("grep Label src/binary.dat")).toBe("grep: ./src/binary.dat: binary file matches");
+		});
+		it("-l still lists a matching binary file by name", () => {
+			expect(run("grep -l Label src/binary.dat")).toBe("./src/binary.dat");
+		});
+		it("-c still counts matches in a binary file", () => {
+			expect(run("grep -c Label src/binary.dat")).toBe("1");
+		});
+		it("a UTF-16-style file with NUL bytes but a text BOM is not misclassified as binary", () => {
+			const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("beta\n", "utf16le")]);
+			writeFileSync(join(root, "src", "utf16.txt"), utf16);
+			expect(run("grep beta src/utf16.txt")).toBe("beta");
+		});
 	});
 
 	// grepInPath silently returned nothing for a missing file (the same catch
