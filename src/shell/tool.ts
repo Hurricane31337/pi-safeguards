@@ -82,7 +82,8 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
 			"(cd changes the directory for statements after it in the same command); there are no exit " +
 			"codes, so && never skips a later statement even if an earlier one failed. " +
-			"cd, rm and mv can only reach the project directory and below. " +
+			"cd, rm and mv can only reach the project directory and below; cd to a nonexistent path or a " +
+			'file reports "cd: no such file or directory" and does not move, same as real cd. ' +
 			"There is no $VAR expansion or FOO=bar assignment syntax anywhere - a literal $VAR or " +
 			"FOO=bar in a command is passed through as-is, not expanded or executed as an assignment. " +
 			"Output redirection with > (overwrite) and >> (append) is supported and stays inside the " +

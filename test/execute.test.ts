@@ -88,6 +88,25 @@ describe("path containment", () => {
 	it("ls -d on a directory names it instead of listing its contents", () => {
 		expect(run("ls -d src")).toBe("src");
 	});
+
+	// cd used to resolve any in-bounds target and accept it unconditionally,
+	// with no check that it actually exists - every relative path after a
+	// typo'd cd then failed with a confusing "No such file or directory"
+	// naming an unrelated command, while the cd itself reported nothing wrong
+	// and pwd would happily print a cwd that does not exist on disk.
+	it("cd to a nonexistent directory reports an error and does not move", () => {
+		const output = run("cd src/does-not-exist && pwd");
+		expect(output).toContain("cd: no such file or directory: src/does-not-exist");
+	});
+
+	it("a failed cd leaves the working directory where it was", () => {
+		expect(run("cd src/does-not-exist\npwd")).toContain(root.replace(/\\/g, "/"));
+	});
+
+	it("cd to a file (not a directory) reports an error, same as a missing path", () => {
+		const output = run("cd src/a.txt && pwd");
+		expect(output).toContain("cd: no such file or directory: src/a.txt");
+	});
 });
 
 describe("statements", () => {

@@ -135,6 +135,14 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
   through pi's built-in `grep` / `find` / `ls` tools where possible; the emulator is the fallback.
 - **`git` needs git on PATH.** Without it, `git` returns a plain German notice rather than failing
   the tool call.
+- **`cd` used to accept any in-bounds path with no existence check.** A typo'd or already-deleted
+  directory silently "succeeded" - `workingDir` became a path that does not exist on disk, `pwd`
+  happily printed it, and every relative path in every later command failed with a confusing
+  "No such file or directory" that named an unrelated command, not the `cd` that actually caused it.
+  Fixed with a `statSync().isDirectory()` check before moving; a bad target now reports
+  `cd: no such file or directory: <target>` and leaves `workingDir` untouched. `cd` to a path
+  *outside* the sandbox is unrelated and stays a deliberate silent no-op (see the comment in
+  `execute.ts` - a refusal message there would have to quote the walked path).
 - **A common Unix command missing from `SUPPORTED_COMMANDS` doesn't get refused - it silently spawns
   the real program of that name via `execExternal`, once approved.** This bit us for real: `sort`
   wasn't emulated, so `sort` resolved to Windows' own `sort.exe` (cmd.exe's, not GNU's), which

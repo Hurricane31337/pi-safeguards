@@ -7,7 +7,7 @@
  * which are anchored to the sandbox root.
  */
 
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isBlocked, isOutside } from "../paths.ts";
 import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "../settings.ts";
@@ -229,7 +229,23 @@ export function executeShellCommand(
 				// Silently ignored, like a `cd` that would leave the root always was:
 				// the model gets an unrelated tool call to explain the containment,
 				// not this one, since a refusal message here quotes the walked path.
-				if (!isOutside(target, root)) workingDir = target;
+				// A target *inside* the sandbox gets no such pass, though - a typo'd
+				// or nonexistent directory needs to say so, or every relative path
+				// after it fails with a confusing "No such file" that names the
+				// wrong command, while the cd itself silently "succeeded".
+				if (!isOutside(target, root)) {
+					let isDir = false;
+					try {
+						isDir = statSync(target).isDirectory();
+					} catch {
+						isDir = false;
+					}
+					if (!isDir) {
+						outputs.push(`cd: no such file or directory: ${arg}`);
+						continue;
+					}
+					workingDir = target;
+				}
 			}
 			continue;
 		}
