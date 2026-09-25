@@ -61,6 +61,15 @@ describe("ripgrep fast path", () => {
 		},
 	);
 
+	it.skipIf(!realRgPath)("matches the JS walk with --include=GLOB", () => {
+		setRipgrepPathForTests(null);
+		const jsOutput = grep("grep -rn --include=*.txt beta src");
+		setRipgrepPathForTests(realRgPath);
+		const rgOutput = grep("grep -rn --include=*.txt beta src");
+		expect(rgOutput.split("\n").sort()).toEqual(jsOutput.split("\n").sort());
+		expect(rgOutput).toBe("./src/a.txt:2:beta");
+	});
+
 	it.skipIf(!realRgPath)("matches the JS walk with -i (ignore case)", () => {
 		setRipgrepPathForTests(null);
 		const jsOutput = grep("grep -rni ALPHA src");

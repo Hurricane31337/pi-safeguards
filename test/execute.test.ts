@@ -202,6 +202,28 @@ describe("search", () => {
 	it("-e still works combined with other flags", () => {
 		expect(run("grep -ic -e ALPHA -e GAMMA src/a.txt")).toBe("2");
 	});
+
+	// The reported bug: "--include" was decomposed letter by letter against
+	// the short-flag switch (its own spelling contains i/n/c/l), silently
+	// setting -c/-l/-i instead of being recognised - turning a plain
+	// recursive match into a bogus per-file match count across the whole
+	// tree, no error, wrong data.
+	it("--include=GLOB filters to matching files, instead of being decomposed into -c/-l/-i/-n", () => {
+		const output = run("grep -rn --include=*.txt -e beta src");
+		expect(output).toBe("./src/a.txt:2:beta");
+		expect(output).not.toContain("b.log");
+		// The corrupted-parse symptom: a bogus per-file match count instead of
+		// the real match line above.
+		expect(output).not.toMatch(/^\.\/src\/a\.txt:1$/m);
+	});
+
+	it("--include GLOB (space-separated) works the same as --include=GLOB", () => {
+		expect(run("grep -rn --include *.txt -e beta src")).toBe("./src/a.txt:2:beta");
+	});
+
+	it("--include with no matching files finds nothing, not an error", () => {
+		expect(run("grep -rn --include=*.nope -e beta src")).toBe("");
+	});
 });
 
 describe("head/tail with a file argument", () => {
@@ -375,6 +397,15 @@ describe("rm and mv", () => {
 		mkdirSync(join(root, "src", "doomed-dir"));
 		expect(run("rm src/doomed-dir")).toContain("Is a directory");
 		expect(run("rm -r src/doomed-dir")).toBe("");
+	});
+
+	// The reported bug, applied to rm: "--force" contains an "r", which the
+	// same letter-by-letter decomposition read as -r (recursive) - so
+	// `rm --force` on a directory would have silently recursed and deleted
+	// it, instead of refusing like a force-less `rm` on a directory should.
+	it("--force does not accidentally enable -r via the 'r' in its own name", () => {
+		mkdirSync(join(root, "src", "force-no-recurse-dir"));
+		expect(run("rm --force src/force-no-recurse-dir")).toContain("Is a directory");
 	});
 
 	it("removes a glob's matches", () => {

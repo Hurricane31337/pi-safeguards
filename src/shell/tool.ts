@@ -71,9 +71,11 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		label: "bash",
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
-			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvc] [-e PATTERN]... (-c with ` +
-			'an empty pattern counts every line, like real grep -c ""; \\( \\) \\{ \\} \\| \\+ \\? act as the ' +
-			"special ERE form even without -E, like real BRE grep; repeating -e ORs the patterns together), " +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvc] [-e PATTERN]... [--include=GLOB] ` +
+			'(-c with an empty pattern counts every line, like real grep -c ""; \\( \\) \\{ \\} \\| \\+ \\? act ' +
+			"as the special ERE form even without -E, like real BRE grep; repeating -e ORs the patterns " +
+			"together; other GNU long options like --word-regexp or --context are not implemented and are " +
+			"silently ignored rather than erroring - stick to the flags listed here), " +
 			"sed -n 'X,Yp', wc -l, uniq [-c] [-d] [-u], sort [-r] [-u] [-n], printf 'fmt' [args...] " +
 			"(\\n/\\t escapes and %s/%d/%f/%o/%x/%X substitution, repeating the format over extra args like " +
 			"real printf), head -n, tail -n (accept one or more file arguments, or stdin, with an " +

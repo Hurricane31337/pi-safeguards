@@ -42,6 +42,24 @@ function expandGlob(pattern: string, cwd: string): string[] {
 	return matches.map((match) => (dirArg === "." ? match : `${dirArg}/${match}`));
 }
 
+/**
+ * The letters bundled in a single-dash flag argument (`-rn` -> "r", "n"), or
+ * "" for a double-dash one. A GNU long option (`--include=*.ts`, `--force`)
+ * must never be decomposed the same way `.slice(1)` alone would: iterating
+ * "-include=*.ts"'s characters happens to walk straight through every short
+ * flag this emulator recognises purely because the option's own spelling
+ * contains those letters ("include" has i/n/c/l - one letter short of
+ * setting every grep flag there is). That silently turned an unsupported
+ * `--include=GLOB` into `-cnli`, replacing a real recursive search with a
+ * per-file match count across the entire tree, and would just as easily
+ * turn `rm --force` into `rm -rf` by way of the "r" in "force". An
+ * unsupported long option must be a no-op, not a random walk through the
+ * short-flag switch below it.
+ */
+function shortFlags(arg: string): string {
+	return arg.startsWith("--") ? "" : arg.slice(1);
+}
+
 /** Expand every non-flag argument's glob, in place order. */
 function expandArgs(args: string[], cwd: string): string[] {
 	const result: string[] = [];
@@ -86,6 +104,7 @@ function grepInPath(
 	root: string,
 	results: string[],
 	showFile: boolean,
+	includeGlob: RegExp | null,
 ): void {
 	let stat: ReturnType<typeof statSync>;
 	try {
@@ -104,10 +123,14 @@ function grepInPath(
 		}
 		for (const entry of entries) {
 			if (entry.startsWith(".") || entry === "node_modules") continue;
-			grepInPath(join(path, entry), pattern, flags, root, results, showFile);
+			grepInPath(join(path, entry), pattern, flags, root, results, showFile, includeGlob);
 		}
 		return;
 	}
+	// --include filters files only, never the directories on the way to them -
+	// same as real grep, where the glob matches basenames of things it would
+	// otherwise search, not the path it walks to get there.
+	if (includeGlob && !includeGlob.test(basename(path))) return;
 	if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return;
 
 	const content = readFileSafe(path);
@@ -161,6 +184,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 	const patterns: string[] = [];
 	let positionalPatternTaken = false;
 	const targets: string[] = [];
+	let includeGlobText: string | null = null;
 
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
@@ -170,8 +194,16 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			positionalPatternTaken = true;
 			continue;
 		}
+		if (arg.startsWith("--include=")) {
+			includeGlobText = arg.slice("--include=".length);
+			continue;
+		}
+		if (arg === "--include" && i + 1 < args.length) {
+			includeGlobText = args[++i];
+			continue;
+		}
 		if (arg.startsWith("-") && arg !== "-") {
-			for (const flag of arg.slice(1)) {
+			for (const flag of shortFlags(arg)) {
 				if (flag === "r" || flag === "R") flags.recursive = true;
 				else if (flag === "n") flags.lineNumbers = true;
 				else if (flag === "i") ignoreCase = true;
@@ -203,6 +235,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		const literal = patterns.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 		regex = new RegExp(literal, ignoreCase ? "i" : "");
 	}
+	const includeGlob = includeGlobText !== null ? globToRegex(includeGlobText) : null;
 
 	const results: string[] = [];
 	if (targets.length === 0 && stdin !== null) {
@@ -236,6 +269,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 					invert: flags.invert,
 					lineNumbers: flags.lineNumbers,
 					filesOnly: flags.filesOnly,
+					includeGlob: includeGlobText,
 				});
 				if (fast !== null) {
 					results.push(...fast);
@@ -246,7 +280,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		if (!usedRipgrep) {
 			for (const target of targets) {
 				if (isBlocked(target, root)) continue;
-				grepInPath(target, regex, flags, root, results, showFile);
+				grepInPath(target, regex, flags, root, results, showFile, includeGlob);
 			}
 		}
 	}
@@ -309,7 +343,7 @@ export function execWc(args: string[], cwd: string, root: string, stdin: string 
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg.startsWith("-") && arg !== "-") {
-			for (const flag of arg.slice(1)) {
+			for (const flag of shortFlags(arg)) {
 				if (flag === "l") showLines = true;
 				else if (flag === "w") showWords = true;
 				else if (flag === "c") showBytes = true;
@@ -375,7 +409,7 @@ export function execUniq(args: string[], cwd: string, root: string, stdin: strin
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg.startsWith("-") && arg !== "-") {
-			for (const flag of arg.slice(1)) {
+			for (const flag of shortFlags(arg)) {
 				if (flag === "c") count = true;
 				else if (flag === "d") duplicatesOnly = true;
 				else if (flag === "u") uniqueOnly = true;
@@ -504,7 +538,7 @@ export function execSort(args: string[], cwd: string, root: string, stdin: strin
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg.startsWith("-") && arg !== "-") {
-			for (const flag of arg.slice(1)) {
+			for (const flag of shortFlags(arg)) {
 				if (flag === "r") reverse = true;
 				else if (flag === "u") unique = true;
 				else if (flag === "n") numeric = true;
@@ -700,7 +734,7 @@ export function execRm(args: string[], cwd: string, root: string): string {
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg.startsWith("-") && arg !== "-") {
-			for (const flag of arg.slice(1)) {
+			for (const flag of shortFlags(arg)) {
 				if (flag === "r" || flag === "R") recursive = true;
 				else if (flag === "f") force = true;
 			}

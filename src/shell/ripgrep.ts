@@ -55,6 +55,8 @@ export interface RipgrepGrepOptions {
 	invert: boolean;
 	lineNumbers: boolean;
 	filesOnly: boolean;
+	/** `--include=GLOB` text, passed straight through - rg's --glob already speaks gitignore-style globs, no translation needed. */
+	includeGlob: string | null;
 }
 
 interface RgMatchEvent {
@@ -96,6 +98,7 @@ export function execRipgrepGrep(
 		"--glob",
 		"!node_modules",
 	];
+	if (options.includeGlob) args.push("--glob", options.includeGlob);
 	if (options.filesOnly) args.push("--files-with-matches");
 	else args.push("--json");
 	if (options.ignoreCase) args.push("--ignore-case");
