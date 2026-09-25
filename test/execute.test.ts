@@ -77,6 +77,12 @@ describe("path containment", () => {
 	it("ignores a standalone cd that would leave the root", () => {
 		expect(run(`cd ${resolve(outsideFile, "..")}\npwd`)).toBe(root.replace(/\\/g, "/"));
 	});
+
+	// readdirSync on a file throws ENOTDIR; that used to be caught and
+	// reported as "No such file or directory" for a file that plainly exists.
+	it("ls on a file argument echoes its name, not 'No such file or directory'", () => {
+		expect(run("ls src/a.txt")).toBe("a.txt");
+	});
 });
 
 describe("statements", () => {
@@ -124,6 +130,83 @@ describe("search", () => {
 	it("finds by name and type", () => {
 		expect(run("find src -name *.log")).toContain("b.log");
 		expect(run("find src -name *.log")).not.toContain("a.txt");
+	});
+
+	it("-c counts matches instead of printing them, from stdin", () => {
+		expect(run("cat src/dupes.txt | grep -c a")).toBe("3");
+	});
+
+	it("-c counts matches per file when grepping files directly", () => {
+		expect(run("grep -c beta src/a.txt")).toBe("1");
+	});
+
+	it("-c prefixes with the filename when recursive or multiple targets, like real grep", () => {
+		const output = run("grep -rc beta src");
+		expect(output).toContain("./src/a.txt:1");
+		expect(output).toContain("./src/b.log:1");
+	});
+});
+
+describe("head/tail with a file argument", () => {
+	// The reported bug: head/tail only ever read stdin, so a bare `head -n 3
+	// file` (no pipe) silently returned nothing - `stdin` was null and there
+	// was no fallback to reading the named file.
+	it("head reads a file directly, not just piped stdin", () => {
+		expect(run("head -n 2 src/a.txt")).toBe("alpha\nbeta");
+	});
+
+	it("tail reads a file directly, not just piped stdin", () => {
+		expect(run("tail -n 2 src/a.txt").trim()).toBe("beta\ngamma");
+	});
+
+	it("head/tail with no flags default to 10 lines from a file", () => {
+		expect(run("head src/a.txt")).toBe("alpha\nbeta\ngamma");
+	});
+
+	it("the old -N form still works together with a file argument", () => {
+		expect(run("head -2 src/a.txt")).toBe("alpha\nbeta");
+	});
+
+	it("refuses a file outside the root", () => {
+		expect(run(`head ${outsideFile}`)).toContain("Access denied");
+		expect(run(`tail ${outsideFile}`)).toContain("Access denied");
+	});
+
+	it("reports a missing file rather than silently returning nothing", () => {
+		expect(run("head src/does-not-exist.txt")).toContain("No such file or directory");
+	});
+});
+
+describe("sort", () => {
+	it("sorts lines lexically from stdin", () => {
+		expect(run("cat src/dupes.txt | sort")).toBe("a\na\na\nb");
+	});
+
+	it("reads a file directly, same as when piped", () => {
+		expect(run("sort src/dupes.txt")).toBe(run("cat src/dupes.txt | sort"));
+	});
+
+	it("-r reverses the order", () => {
+		expect(run("cat src/dupes.txt | sort -r")).toBe("b\na\na\na");
+	});
+
+	it("-u dedupes after sorting", () => {
+		expect(run("cat src/dupes.txt | sort -u")).toBe("a\nb");
+	});
+
+	it("-n compares numerically instead of lexically", () => {
+		const numbers = "10\n2\n1\n";
+		writeFileSync(join(root, "src", "numbers.txt"), numbers, "utf8");
+		expect(run("sort -n src/numbers.txt")).toBe("1\n2\n10");
+		expect(run("sort src/numbers.txt")).toBe("1\n10\n2"); // lexical, for contrast
+	});
+
+	it("combines with uniq -c into the classic sort | uniq -c pipeline", () => {
+		expect(
+			run("cat src/dupes.txt | sort | uniq -c")
+				.split("\n")
+				.map((l) => l.trim()),
+		).toEqual(["3 a", "1 b"]);
 	});
 });
 

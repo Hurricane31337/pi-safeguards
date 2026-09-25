@@ -20,6 +20,7 @@ import {
 	execMv,
 	execRm,
 	execSed,
+	execSort,
 	execTail,
 	execUniq,
 	execWc,
@@ -42,6 +43,7 @@ export const SUPPORTED_COMMANDS = [
 	"sed",
 	"wc",
 	"uniq",
+	"sort",
 	"head",
 	"tail",
 	"find",
@@ -97,10 +99,12 @@ function executeSegment(
 				return execWc(args, cwd, root, stdin);
 			case "uniq":
 				return execUniq(args, cwd, root, stdin);
+			case "sort":
+				return execSort(args, cwd, root, stdin);
 			case "head":
-				return execHead(args, stdin);
+				return execHead(args, cwd, root, stdin);
 			case "tail":
-				return execTail(args, stdin);
+				return execTail(args, cwd, root, stdin);
 			case "find":
 				return execFind(args, cwd, root);
 			case "cat":

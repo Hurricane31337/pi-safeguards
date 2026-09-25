@@ -9,8 +9,9 @@ Two things, both **policy** rather than behaviour:
 | pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
 
-Supported commands: `grep [-rnilv]`, `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`, `head -n`,
-`tail -n`, `find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, `|` chaining,
+Supported commands: `grep [-rnilvc]`, `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`,
+`sort [-r] [-u] [-n]`, `head -n`, `tail -n` (both accept a file argument or stdin),
+`find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, `|` chaining,
 `>`/`>>` output redirection, and a `<<'EOF' ... EOF` heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
@@ -18,6 +19,11 @@ included — goes through `defaultPolicy` (see "Configuring the command policy" 
 default is `ask`, so the model is not silently refused and not silently allowed to spawn a process,
 it is asked about by name every time. Set `defaultPolicy` to `deny` (or override a specific one of
 them) for the old refuse-outright behaviour.
+
+There is no `$VAR` expansion, no `FOO=bar` prefix-assignment syntax, and `&&` is not gated on an
+exit code (there are no exit codes at all — see `splitStatements()`'s doc comment — so `&&` behaves
+exactly like `;`, and a denied/failed command never skips what comes after it). None of this is a
+regression to chase; it was never implemented.
 
 ### Redirection and heredocs
 
@@ -88,7 +94,7 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 
 | Command | State |
 |---|---|
-| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `pwd`, `sed`, `tail`, `wc` | `allow` |
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
 | `git`, `mv`, `rm` | `ask` |
 
 `/safeguards <command> clear` on one of these resets it back to this table's value rather than to
@@ -126,6 +132,12 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
   through pi's built-in `grep` / `find` / `ls` tools where possible; the emulator is the fallback.
 - **`git` needs git on PATH.** Without it, `git` returns a plain German notice rather than failing
   the tool call.
+- **A common Unix command missing from `SUPPORTED_COMMANDS` doesn't get refused - it silently spawns
+  the real program of that name via `execExternal`, once approved.** This bit us for real: `sort`
+  wasn't emulated, so `sort` resolved to Windows' own `sort.exe` (cmd.exe's, not GNU's), which
+  mangled UTF-8 through the OEM codepage and rejected GNU-style flags like `-u` — looking exactly
+  like a broken emulator rather than a missing one. Before assuming a command is "emulated but
+  buggy," check `SUPPORTED_COMMANDS` first; it may just not exist yet.
 - **Relative imports must use `.ts`** — extensions load from source through jiti.
 
 ## Tests

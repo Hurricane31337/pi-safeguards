@@ -92,4 +92,29 @@ describe("extension wiring", () => {
 		const result = await bash.execute("call-4", { command }, undefined, undefined, { cwd: root } as ExtensionContext);
 		expect((result.content[0] as { text: string }).text.trim()).toBe("3");
 	});
+
+	// Reproduces the exact real-world pipeline that surfaced sort's absence
+	// (it fell through to the real Windows sort.exe instead of being refused
+	// or emulated) and head/tail's stdin-only limitation.
+	it("runs the classic sort | uniq -c pipeline end to end through the registered tool", async () => {
+		writeFileSync(join(root, "authors.txt"), "alice\nbob\nalice\nalice\nbob\n", "utf8");
+		const [bash] = load(root).tools;
+		const result = await bash.execute(
+			"call-5",
+			{ command: "cat authors.txt | sort | uniq -c" },
+			undefined,
+			undefined,
+			{ cwd: root } as ExtensionContext,
+		);
+		const text = (result.content[0] as { text: string }).text;
+		expect(text.split("\n").map((line) => line.trim())).toEqual(["3 alice", "2 bob"]);
+	});
+
+	it("head reads a file argument end to end through the registered tool", async () => {
+		const [bash] = load(root).tools;
+		const result = await bash.execute("call-6", { command: "head -n 1 authors.txt" }, undefined, undefined, {
+			cwd: root,
+		} as ExtensionContext);
+		expect((result.content[0] as { text: string }).text).toBe("alice");
+	});
 });

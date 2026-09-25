@@ -75,6 +75,7 @@ interface GrepFlags {
 	lineNumbers: boolean;
 	filesOnly: boolean;
 	invert: boolean;
+	countOnly: boolean;
 }
 
 function grepInPath(
@@ -113,6 +114,16 @@ function grepInPath(
 	const lines = content.split("\n");
 	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
+	if (flags.countOnly) {
+		let count = 0;
+		for (const line of lines) {
+			if (pattern.test(line) === flags.invert) continue;
+			count++;
+		}
+		results.push(showFile ? `${rel}:${count}` : String(count));
+		return;
+	}
+
 	for (let i = 0; i < lines.length; i++) {
 		if (pattern.test(lines[i]) === flags.invert) continue;
 		if (flags.filesOnly) {
@@ -127,7 +138,7 @@ function grepInPath(
 }
 
 export function execGrep(args: string[], cwd: string, root: string, stdin: string | null): string {
-	const flags: GrepFlags = { recursive: false, lineNumbers: false, filesOnly: false, invert: false };
+	const flags: GrepFlags = { recursive: false, lineNumbers: false, filesOnly: false, invert: false, countOnly: false };
 	let ignoreCase = false;
 	let pattern: string | null = null;
 	const targets: string[] = [];
@@ -142,6 +153,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				else if (flag === "i") ignoreCase = true;
 				else if (flag === "l") flags.filesOnly = true;
 				else if (flag === "v") flags.invert = true;
+				else if (flag === "c") flags.countOnly = true;
 				// unknown flags are ignored
 			}
 		} else if (pattern === null) pattern = arg;
@@ -160,6 +172,14 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 	const results: string[] = [];
 	if (targets.length === 0 && stdin !== null) {
 		const lines = stdin.split("\n");
+		if (flags.countOnly) {
+			let count = 0;
+			for (const line of lines) {
+				if (regex.test(line) === flags.invert) continue;
+				count++;
+			}
+			return String(count);
+		}
 		for (let i = 0; i < lines.length; i++) {
 			if (regex.test(lines[i]) === flags.invert) continue;
 			results.push(flags.lineNumbers ? `${i + 1}:${lines[i]}` : lines[i]);
@@ -289,16 +309,97 @@ export function execUniq(args: string[], cwd: string, root: string, stdin: strin
 	return output.join("\n");
 }
 
-export function execHead(args: string[], stdin: string | null): string {
+/**
+ * The positional file argument for head/tail, skipping over -n's own value
+ * (`-n 3 file.txt`) and the old-style `-N` count form (`-3 file.txt`) so
+ * neither is mistaken for a filename.
+ */
+function fileArgFor(args: string[]): string | null {
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "-n") {
+			i++; // skip its value
+			continue;
+		}
+		if (/^-\d+$/.test(arg)) continue;
+		if (arg.startsWith("-")) continue;
+		return arg;
+	}
+	return null;
+}
+
+export function execHead(args: string[], cwd: string, root: string, stdin: string | null): string {
+	const file = fileArgFor(args);
+	if (file) {
+		const path = resolve(cwd, file);
+		if (isBlocked(path, root)) return "Access denied: path outside project.";
+		const content = readFileSafe(path);
+		if (content === null) return `head: ${file}: No such file or directory`;
+		const lines = content.split("\n");
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		return lines.slice(0, parseLineCount(args, 10)).join("\n");
+	}
 	return (stdin ?? "").split("\n").slice(0, parseLineCount(args, 10)).join("\n");
 }
 
-export function execTail(args: string[], stdin: string | null): string {
-	const lines = (stdin ?? "").split("\n");
+export function execTail(args: string[], cwd: string, root: string, stdin: string | null): string {
+	const file = fileArgFor(args);
+	let content: string;
+	if (file) {
+		const path = resolve(cwd, file);
+		if (isBlocked(path, root)) return "Access denied: path outside project.";
+		const read = readFileSafe(path);
+		if (read === null) return `tail: ${file}: No such file or directory`;
+		content = read;
+	} else {
+		content = stdin ?? "";
+	}
+	const lines = content.split("\n");
 	// A trailing newline terminates the last line, it does not start an empty
 	// one — counting it would shift the window by one against what tail prints.
 	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
 	return lines.slice(Math.max(0, lines.length - parseLineCount(args, 10))).join("\n");
+}
+
+/** `-r` reverses, `-u` dedupes adjacent-after-sort lines, `-n` compares numerically instead of lexically. */
+export function execSort(args: string[], cwd: string, root: string, stdin: string | null): string {
+	let reverse = false;
+	let unique = false;
+	let numeric = false;
+	let file: string | null = null;
+
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of arg.slice(1)) {
+				if (flag === "r") reverse = true;
+				else if (flag === "u") unique = true;
+				else if (flag === "n") numeric = true;
+			}
+		} else file = arg;
+	}
+
+	let content: string;
+	if (file) {
+		const path = resolve(cwd, file);
+		if (isBlocked(path, root)) return "Access denied: path outside project.";
+		const read = readFileSafe(path);
+		if (read === null) return `sort: ${file}: No such file or directory`;
+		content = read;
+	} else if (stdin !== null) {
+		content = stdin;
+	} else {
+		return "(sort: no input)";
+	}
+
+	let lines = content.split("\n");
+	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+
+	lines = [...lines].sort(numeric ? (a, b) => Number.parseFloat(a) - Number.parseFloat(b) : undefined);
+	if (reverse) lines.reverse();
+	if (unique) lines = lines.filter((line, i) => i === 0 || line !== lines[i - 1]);
+
+	return lines.join("\n");
 }
 
 function findWalk(
@@ -367,6 +468,11 @@ export function execLs(args: string[], cwd: string, root: string): string {
 	const path = resolve(cwd, target ?? ".");
 	if (isBlocked(path, root)) return "Access denied: path outside project.";
 	try {
+		const stat = statSync(path);
+		// readdirSync on a file throws ENOTDIR - that reads as "does not exist"
+		// to a model, even though the file is right there; real `ls` on a file
+		// argument just echoes its name back.
+		if (!stat.isDirectory()) return basename(path);
 		return readdirSync(path, { withFileTypes: true })
 			.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
 			.join("\n");

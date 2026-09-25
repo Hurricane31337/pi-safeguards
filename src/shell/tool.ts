@@ -71,14 +71,17 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		label: "bash",
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
-			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilv], sed -n 'X,Yp', wc -l, ` +
-			"uniq [-c] [-d] [-u], head -n, tail -n, find [-name] [-type f/d] [-maxdepth], cat, ls, cd, " +
-			"rm [-rf], mv, echo, pwd. " +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvc], sed -n 'X,Yp', wc -l, ` +
+			"uniq [-c] [-d] [-u], sort [-r] [-u] [-n], head -n, tail -n (both accept a file argument or " +
+			"stdin), find [-name] [-type f/d] [-maxdepth], cat, ls, cd, rm [-rf], mv, echo, pwd. " +
 			"Glob patterns like *.py are expanded for wc, rm and mv. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
-			"(cd changes the directory for statements after it in the same command). " +
+			"(cd changes the directory for statements after it in the same command); there are no exit " +
+			"codes, so && never skips a later statement even if an earlier one failed. " +
 			"cd, rm and mv can only reach the project directory and below. " +
+			"There is no $VAR expansion or FOO=bar assignment syntax anywhere - a literal $VAR or " +
+			"FOO=bar in a command is passed through as-is, not expanded or executed as an assignment. " +
 			"Output redirection with > (overwrite) and >> (append) is supported and stays inside the " +
 			"project directory like every other command; writes are UTF-8 — for a file that must keep " +
 			"its original encoding, use the write/edit tools instead. Only stdout redirection is " +
