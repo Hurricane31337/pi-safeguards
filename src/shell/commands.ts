@@ -12,6 +12,7 @@ import { type Dirent, readdirSync, readFileSync, renameSync, rmSync, statSync } 
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isBlocked, isOutside, isSpilled } from "../paths.ts";
 import { globToRegex, parseLineCount } from "./parse.ts";
+import { execRipgrepGrep } from "./ripgrep.ts";
 
 /**
  * Expand a single glob argument (`*.py`) against the directory it names,
@@ -221,9 +222,32 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		}
 	} else {
 		const showFile = flags.recursive || targets.length > 1;
-		for (const target of targets) {
-			if (isBlocked(target, root)) continue;
-			grepInPath(target, regex, flags, root, results, showFile);
+		// Recursive multi-file scans are the only case worth ripgrep's process
+		// overhead; countOnly is excluded because rg's --count silently omits
+		// files with zero matches while grepInPath always reports them, and
+		// invert+filesOnly is excluded as too rare a combination to be worth
+		// replicating rg's different "file has an inverted match" semantics for.
+		let usedRipgrep = false;
+		if (flags.recursive && !flags.countOnly && !(flags.invert && flags.filesOnly)) {
+			const validTargets = targets.filter((target) => !isBlocked(target, root));
+			if (validTargets.length > 0) {
+				const fast = execRipgrepGrep(regex.source, validTargets, root, {
+					ignoreCase,
+					invert: flags.invert,
+					lineNumbers: flags.lineNumbers,
+					filesOnly: flags.filesOnly,
+				});
+				if (fast !== null) {
+					results.push(...fast);
+					usedRipgrep = true;
+				}
+			}
+		}
+		if (!usedRipgrep) {
+			for (const target of targets) {
+				if (isBlocked(target, root)) continue;
+				grepInPath(target, regex, flags, root, results, showFile);
+			}
 		}
 	}
 	return results.join("\n");
