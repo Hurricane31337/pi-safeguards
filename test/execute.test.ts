@@ -304,6 +304,63 @@ describe("search", () => {
 		const first = run("grep -rn beta src");
 		for (let i = 0; i < 5; i++) expect(run("grep -rn beta src")).toBe(first);
 	});
+
+	// A directory operand without -r used to fall straight into grepInPath's
+	// "not recursive, stop here" branch with no message at all, so
+	// `grep foo src/` (forgetting -r, a common typo) looked exactly like a
+	// clean "not found" instead of the refusal real grep gives.
+	it("a directory without -r is reported, not silently treated as zero matches", () => {
+		expect(run("grep beta src")).toBe("grep: ./src: Is a directory");
+		expect(run("grep -c beta src")).toBe("grep: ./src: Is a directory");
+		expect(run("grep -l beta src")).toBe("grep: ./src: Is a directory");
+	});
+
+	describe("-r directory traversal", () => {
+		beforeAll(() => {
+			mkdirSync(join(root, "src", ".hidden"), { recursive: true });
+			writeFileSync(join(root, "src", ".hidden", "h.txt"), "hidden beta\n", "utf8");
+			mkdirSync(join(root, "src", ".git"), { recursive: true });
+			writeFileSync(join(root, "src", ".git", "g.txt"), "git beta\n", "utf8");
+		});
+
+		// Real grep -r descends into dot-directories; only .git (a deliberate,
+		// narrow exception, not a blanket "skip anything hidden") is excluded -
+		// this used to skip every dot-directory, silently under-reporting
+		// .claude/, .github/, any dot-config directory.
+		it("descends into dot-directories other than .git", () => {
+			const output = run("grep -rn beta src");
+			expect(output).toContain("./src/.hidden/h.txt:1:hidden beta");
+			expect(output).not.toContain(".git");
+		});
+
+		it("--exclude-dir=GLOB excludes a matching directory from the recursive walk", () => {
+			const output = run("grep -rn --exclude-dir=.hidden beta src");
+			expect(output).not.toContain(".hidden");
+			expect(output).toContain("./src/a.txt:2:beta");
+		});
+	});
+
+	// -o prints only the matched text, once per match, not the whole line -
+	// previously ignored entirely (whole lines came back regardless).
+	it("-o prints only the matched substrings, one per match on a line", () => {
+		writeFileSync(join(root, "src", "oh.txt"), "banana\n", "utf8");
+		expect(run("grep -o an src/oh.txt")).toBe("an\nan");
+	});
+
+	// -q used to still print matches despite claiming to be quiet; there are
+	// no exit codes here for -q's usual "check $?" role, so quiet output is
+	// the only behaviour left to honor.
+	it("-q suppresses all output", () => {
+		expect(run("grep -q beta src/a.txt")).toBe("");
+		expect(run("grep -rq beta src")).toBe("");
+	});
+
+	// -h/-H override the recursive-or-multi-file heuristic that otherwise
+	// decides whether filenames are shown.
+	it("-h hides the filename even when it would otherwise show, -H forces it even for one file", () => {
+		expect(run("grep -rhn beta src/a.txt")).toBe("2:beta");
+		expect(run("grep -Hn beta src/a.txt")).toBe("./src/a.txt:2:beta");
+	});
 });
 
 describe("head/tail with a file argument", () => {

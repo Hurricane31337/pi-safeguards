@@ -95,6 +95,7 @@ interface GrepFlags {
 	filesOnly: boolean;
 	invert: boolean;
 	countOnly: boolean;
+	onlyMatching: boolean;
 }
 
 function grepInPath(
@@ -105,6 +106,8 @@ function grepInPath(
 	results: string[],
 	showFile: boolean,
 	includeGlob: RegExp | null,
+	excludeDirGlob: RegExp | null,
+	isTopLevelTarget: boolean,
 ): void {
 	let stat: ReturnType<typeof statSync>;
 	try {
@@ -112,9 +115,21 @@ function grepInPath(
 	} catch {
 		return;
 	}
+	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
 	if (stat.isDirectory()) {
-		if (!flags.recursive) return;
+		if (!flags.recursive) {
+			// Only a target named directly by the model gets this message - a
+			// directory reached while already recursing (flags.recursive is
+			// true there, so this branch never runs for it) is meant to be
+			// walked, not reported. Real grep says the same thing and refuses
+			// to search a directory without -r; this used to be a silent
+			// no-op indistinguishable from "no matches", which made `grep foo
+			// src/` (forgetting -r, the single most common grep typo) look
+			// like a confident, wrong "not found".
+			if (isTopLevelTarget) results.push(`grep: ${rel}: Is a directory`);
+			return;
+		}
 		let entries: string[];
 		try {
 			entries = readdirSync(path);
@@ -122,8 +137,14 @@ function grepInPath(
 			return;
 		}
 		for (const entry of entries) {
-			if (entry.startsWith(".") || entry === "node_modules") continue;
-			grepInPath(join(path, entry), pattern, flags, root, results, showFile, includeGlob);
+			// Real grep -r descends into dot-directories too; only .git is
+			// excluded here (a deliberate, narrow exception - not a blanket
+			// "skip anything hidden" the way ripgrep defaults to - since real
+			// grep would otherwise be a trap: `.claude/`, `.github/`, any
+			// dot-config directory used to be silently invisible to -r).
+			if (entry === ".git" || entry === "node_modules") continue;
+			if (excludeDirGlob?.test(entry)) continue;
+			grepInPath(join(path, entry), pattern, flags, root, results, showFile, includeGlob, excludeDirGlob, false);
 		}
 		return;
 	}
@@ -140,7 +161,6 @@ function grepInPath(
 	// one - without this, a pattern that matches an empty string (an empty
 	// pattern, or e.g. ".*") would report one bogus extra match per file.
 	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
 	const isMatch = (line: string) => pattern.test(line) !== flags.invert;
 
@@ -160,6 +180,15 @@ function grepInPath(
 
 	for (let i = 0; i < lines.length; i++) {
 		if (!isMatch(lines[i])) continue;
+		if (flags.onlyMatching) {
+			for (const match of lines[i].matchAll(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))) {
+				let line = "";
+				if (showFile) line += `${rel}:`;
+				if (flags.lineNumbers) line += `${i + 1}:`;
+				results.push(line + match[0]);
+			}
+			continue;
+		}
 		let line = "";
 		if (showFile) line += `${rel}:`;
 		if (flags.lineNumbers) line += `${i + 1}:`;
@@ -202,14 +231,26 @@ function bareGrepEscapesToRegex(pattern: string): string {
 }
 
 export function execGrep(args: string[], cwd: string, root: string, stdin: string | null): string {
-	const flags: GrepFlags = { recursive: false, lineNumbers: false, filesOnly: false, invert: false, countOnly: false };
+	const flags: GrepFlags = {
+		recursive: false,
+		lineNumbers: false,
+		filesOnly: false,
+		invert: false,
+		countOnly: false,
+		onlyMatching: false,
+	};
 	let ignoreCase = false;
 	let extendedRegex = false;
 	let wordBoundary = false;
+	let quiet = false;
+	// "auto" is the existing recursive-or-multi-file heuristic; -h/-H pin it
+	// either way regardless of target count, like real grep.
+	let filenamePrefix: "auto" | "always" | "never" = "auto";
 	const patterns: string[] = [];
 	let positionalPatternTaken = false;
 	const targets: string[] = [];
 	let includeGlobText: string | null = null;
+	let excludeDirGlobText: string | null = null;
 
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
@@ -225,6 +266,14 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		}
 		if (arg === "--include" && i + 1 < args.length) {
 			includeGlobText = args[++i];
+			continue;
+		}
+		if (arg.startsWith("--exclude-dir=")) {
+			excludeDirGlobText = arg.slice("--exclude-dir=".length);
+			continue;
+		}
+		if (arg === "--exclude-dir" && i + 1 < args.length) {
+			excludeDirGlobText = args[++i];
 			continue;
 		}
 		// -A/-B/-C (context lines) and -m (max count) are not implemented, but
@@ -249,6 +298,10 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				else if (flag === "c") flags.countOnly = true;
 				else if (flag === "E") extendedRegex = true;
 				else if (flag === "w") wordBoundary = true;
+				else if (flag === "o") flags.onlyMatching = true;
+				else if (flag === "q") quiet = true;
+				else if (flag === "h") filenamePrefix = "never";
+				else if (flag === "H") filenamePrefix = "always";
 				// unknown flags are ignored
 			}
 		} else if (!positionalPatternTaken) {
@@ -285,6 +338,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		regex = new RegExp(withBoundary(literal), ignoreCase ? "i" : "");
 	}
 	const includeGlob = includeGlobText !== null ? globToRegex(includeGlobText) : null;
+	const excludeDirGlob = excludeDirGlobText !== null ? globToRegex(excludeDirGlobText) : null;
 
 	const results: string[] = [];
 	if (targets.length === 0 && stdin !== null) {
@@ -296,21 +350,33 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				if (regex.test(line) === flags.invert) continue;
 				count++;
 			}
-			return String(count);
+			return quiet ? "" : String(count);
 		}
 		for (let i = 0; i < lines.length; i++) {
 			if (regex.test(lines[i]) === flags.invert) continue;
+			if (flags.onlyMatching) {
+				for (const match of lines[i].matchAll(new RegExp(regex.source, `${regex.flags.replace("g", "")}g`))) {
+					results.push(flags.lineNumbers ? `${i + 1}:${match[0]}` : match[0]);
+				}
+				continue;
+			}
 			results.push(flags.lineNumbers ? `${i + 1}:${lines[i]}` : lines[i]);
 		}
 	} else {
-		const showFile = flags.recursive || targets.length > 1;
+		// -h/-H pin the filename prefix either way; otherwise the existing
+		// recursive-or-multi-file heuristic decides.
+		const showFile =
+			filenamePrefix === "always" || (filenamePrefix === "auto" && (flags.recursive || targets.length > 1));
 		// Recursive multi-file scans are the only case worth ripgrep's process
 		// overhead; countOnly is excluded because rg's --count silently omits
 		// files with zero matches while grepInPath always reports them, and
 		// invert+filesOnly is excluded as too rare a combination to be worth
 		// replicating rg's different "file has an inverted match" semantics for.
+		// -o also stays on the JS path - rg's --json output already gives
+		// exact match spans, but reusing them would need a second output
+		// format in ripgrep.ts for a flag this rare.
 		let usedRipgrep = false;
-		if (flags.recursive && !flags.countOnly && !(flags.invert && flags.filesOnly)) {
+		if (flags.recursive && !flags.countOnly && !(flags.invert && flags.filesOnly) && !flags.onlyMatching) {
 			const validTargets = targets.filter((target) => !isBlocked(target, root));
 			if (validTargets.length > 0) {
 				const fast = execRipgrepGrep(regex.source, validTargets, root, {
@@ -319,6 +385,8 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 					lineNumbers: flags.lineNumbers,
 					filesOnly: flags.filesOnly,
 					includeGlob: includeGlobText,
+					excludeDirGlob: excludeDirGlobText,
+					showFile,
 				});
 				if (fast !== null) {
 					results.push(...fast);
@@ -341,7 +409,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 					results.push(`grep: ${shown}: No such file or directory`);
 					continue;
 				}
-				grepInPath(target, regex, flags, root, results, showFile, includeGlob);
+				grepInPath(target, regex, flags, root, results, showFile, includeGlob, excludeDirGlob, true);
 			}
 		}
 		// The ripgrep fast path walks a directory tree in parallel, so the same
@@ -354,7 +422,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		if (flags.recursive)
 			results.sort((a, b) => (a.split(":")[0] < b.split(":")[0] ? -1 : a.split(":")[0] > b.split(":")[0] ? 1 : 0));
 	}
-	return results.join("\n");
+	return quiet ? "" : results.join("\n");
 }
 
 export function execSed(args: string[], cwd: string, root: string, stdin: string | null): string {

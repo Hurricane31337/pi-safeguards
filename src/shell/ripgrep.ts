@@ -57,6 +57,10 @@ export interface RipgrepGrepOptions {
 	filesOnly: boolean;
 	/** `--include=GLOB` text, passed straight through - rg's --glob already speaks gitignore-style globs, no translation needed. */
 	includeGlob: string | null;
+	/** `--exclude-dir=GLOB` text, passed straight through as a negated --glob, same as includeGlob. */
+	excludeDirGlob: string | null;
+	/** Whether to prefix each match with its file path - commands.ts's own showFile, honoring -h/-H. */
+	showFile: boolean;
 }
 
 interface RgMatchEvent {
@@ -76,10 +80,11 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
  * returns output lines in the exact same shape `grepInPath` would have
  * produced, or null on anything that should fall back to the JS walk:
  * ripgrep missing, a regex it refuses, or a process-level failure. Only
- * dotfiles/dot-directories and `node_modules` are excluded, matching
- * grepInPath's own filter - not .gitignore, which the JS walk never
- * consults either, so ripgrep must be told to ignore it too or the two
- * paths would silently search a different set of files.
+ * `.git` and `node_modules` are excluded, matching grepInPath's own filter -
+ * not .gitignore, which the JS walk never consults either, and not other
+ * dot-directories, which real grep -r does descend into (rg's own default is
+ * the opposite - hidden files/dirs excluded unless --hidden is passed - so
+ * --hidden is required here specifically to match grep, not rg's defaults).
  */
 export function execRipgrepGrep(
 	patternSource: string,
@@ -93,12 +98,16 @@ export function execRipgrepGrep(
 	const args = [
 		"--no-config",
 		"--no-ignore",
+		"--hidden",
 		"--max-filesize",
 		String(MAX_FILE_SIZE_BYTES),
 		"--glob",
 		"!node_modules",
+		"--glob",
+		"!.git",
 	];
 	if (options.includeGlob) args.push("--glob", options.includeGlob);
+	if (options.excludeDirGlob) args.push("--glob", `!${options.excludeDirGlob}`);
 	if (options.filesOnly) args.push("--files-with-matches");
 	else args.push("--json");
 	if (options.ignoreCase) args.push("--ignore-case");
@@ -138,8 +147,8 @@ export function execRipgrepGrep(
 			continue;
 		}
 		if (event.type !== "match") continue;
-		const rel = `./${relative(root, event.data.path.text).replace(/\\/g, "/")}`;
-		let entry = `${rel}:`;
+		let entry = "";
+		if (options.showFile) entry += `./${relative(root, event.data.path.text).replace(/\\/g, "/")}:`;
 		if (options.lineNumbers) entry += `${event.data.line_number}:`;
 		entry += event.data.lines.text.replace(/\r?\n$/, "");
 		output.push(entry);

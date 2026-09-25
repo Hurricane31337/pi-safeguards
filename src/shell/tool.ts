@@ -71,15 +71,18 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		label: "bash",
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
-			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvcwE] [-e PATTERN]... [--include=GLOB] ` +
-			'(-c with an empty pattern counts every line, like real grep -c ""; real BRE dialect by default - ' +
-			"( ) { } | + ? are literal unless backslash-escaped, in which case they take the special ERE " +
-			"meaning (\\( \\) \\{ \\} \\| \\+ \\?); -E switches to ERE, where the bare forms are special instead; " +
-			"-w matches whole words only; repeating -e ORs the patterns together; -l wins over -c when both " +
-			"are given; -A/-B/-C/-m and other GNU long options like --word-regexp are not implemented and are " +
-			"silently ignored (their numeric operand, if any, is still consumed so it can't be misread as the " +
-			"pattern) rather than erroring - stick to the flags listed here; a missing file is reported, same " +
-			"as cat/wc), " +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvcwoqhHE] [-e PATTERN]... ` +
+			"[--include=GLOB] [--exclude-dir=GLOB] (-c with an empty pattern counts every line, like real grep " +
+			'-c ""; real BRE dialect by default - ( ) { } | + ? are literal unless backslash-escaped, in which ' +
+			"case they take the special ERE meaning (\\( \\) \\{ \\} \\| \\+ \\?); -E switches to ERE, where the " +
+			"bare forms are special instead; -w matches whole words only; -o prints only the matched text, one " +
+			"line per match; -q suppresses all output; -h/-H force the filename prefix off/on regardless of " +
+			"target count; repeating -e ORs the patterns together; -l wins over -c when both are given; -r " +
+			"descends into dot-directories too (only .git and node_modules are skipped, not every hidden " +
+			"entry); -A/-B/-C/-m are not implemented and are silently ignored (their numeric operand, if any, " +
+			"is still consumed so it can't be misread as the pattern) rather than erroring - stick to the " +
+			'flags listed here; a missing file reports "No such file or directory" and a directory operand ' +
+			'without -r reports "Is a directory", both the same way cat/wc already report a missing file), ' +
 			"sed -n 'X,Yp', wc -l, uniq [-c] [-d] [-u], sort [-r] [-u] [-n], printf 'fmt' [args...] " +
 			"(\\n/\\t escapes and %s/%d/%f/%o/%x/%X substitution, repeating the format over extra args like " +
 			"real printf), head -n, tail -n (accept one or more file arguments, or stdin, with an " +

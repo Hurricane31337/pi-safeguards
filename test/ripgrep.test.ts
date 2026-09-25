@@ -26,6 +26,10 @@ const setup = () => {
 	writeFileSync(join(root, "src", "b.log"), "beta only\n", "utf8");
 	mkdirSync(join(root, "src", "node_modules"));
 	writeFileSync(join(root, "src", "node_modules", "vendored.txt"), "beta from a dependency\n", "utf8");
+	mkdirSync(join(root, "src", ".hidden"));
+	writeFileSync(join(root, "src", ".hidden", "h.txt"), "hidden beta\n", "utf8");
+	mkdirSync(join(root, "src", ".git"));
+	writeFileSync(join(root, "src", ".git", "g.txt"), "git beta\n", "utf8");
 };
 setup();
 
@@ -67,7 +71,32 @@ describe("ripgrep fast path", () => {
 		setRipgrepPathForTests(realRgPath);
 		const rgOutput = grep("grep -rn --include=*.txt beta src");
 		expect(rgOutput.split("\n").sort()).toEqual(jsOutput.split("\n").sort());
-		expect(rgOutput).toBe("./src/a.txt:2:beta");
+		expect(rgOutput).toContain("./src/a.txt:2:beta");
+	});
+
+	it.skipIf(!realRgPath)("matches the JS walk with --exclude-dir=GLOB", () => {
+		setRipgrepPathForTests(null);
+		const jsOutput = grep("grep -rn --exclude-dir=.hidden beta src");
+		setRipgrepPathForTests(realRgPath);
+		const rgOutput = grep("grep -rn --exclude-dir=.hidden beta src");
+		expect(rgOutput.split("\n").sort()).toEqual(jsOutput.split("\n").sort());
+		expect(rgOutput).not.toContain(".hidden");
+		expect(rgOutput).toContain("./src/a.txt:2:beta");
+	});
+
+	// Real grep -r descends into dot-directories; only .git is excluded (see
+	// ripgrep.ts's block comment) - rg's own default is the opposite (hidden
+	// entries excluded unless --hidden is passed), so this specifically
+	// proves --hidden plus the negated .git glob reproduces grep's behaviour,
+	// not rg's.
+	it.skipIf(!realRgPath)("descends into dot-directories other than .git, matching the JS walk", () => {
+		setRipgrepPathForTests(null);
+		const jsOutput = grep("grep -rn beta src");
+		setRipgrepPathForTests(realRgPath);
+		const rgOutput = grep("grep -rn beta src");
+		expect(rgOutput.split("\n").sort()).toEqual(jsOutput.split("\n").sort());
+		expect(rgOutput).toContain("./src/.hidden/h.txt:1:hidden beta");
+		expect(rgOutput).not.toContain(".git");
 	});
 
 	// -w is implemented by wrapping the compiled pattern in \b...\b at the
@@ -129,6 +158,15 @@ describe("ripgrep fast path", () => {
 		// this wouldn't be a lookbehind for either engine to reject.
 		const output = grep(`grep -rnE (?<=al)pha src/a.txt`);
 		expect(output).toBe("./src/a.txt:1:alpha");
+	});
+
+	it.skipIf(!realRgPath)("matches the JS walk with -h (suppress filename)", () => {
+		setRipgrepPathForTests(null);
+		const jsOutput = grep("grep -rhn beta src/a.txt");
+		setRipgrepPathForTests(realRgPath);
+		const rgOutput = grep("grep -rhn beta src/a.txt");
+		expect(rgOutput).toEqual(jsOutput);
+		expect(rgOutput).toBe("2:beta");
 	});
 
 	it.skipIf(!realRgPath)("still excludes node_modules and respects the sandbox root when using ripgrep", () => {
