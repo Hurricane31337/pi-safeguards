@@ -194,8 +194,17 @@ export function extractHeredocs(input: string): HeredocExtraction {
 
 		const marker = `${HEREDOC_MARKER_PREFIX}${counter++}\u0000`;
 		bodies.set(marker, bodyLines.join("\n"));
-		result += input.slice(cursor, opStart) + marker + trailingOnLine;
-		cursor = lineEnd + 1 + consumedChars;
+		const nextCursor = lineEnd + 1 + consumedChars;
+		// The terminator line's own newline was consumed into consumedChars
+		// (cursor lands past it) but never written to `result`. When more
+		// input follows, that newline needs restoring here, or a statement
+		// after the heredoc on the next line glues directly onto this one
+		// instead of starting fresh - silently swallowing it into the
+		// heredoc command's own argv. Nothing follows -> no newline to add,
+		// which is what keeps a heredoc-only input marker-only (no trailing
+		// "\n" some callers specifically check for).
+		result += input.slice(cursor, opStart) + marker + trailingOnLine + (nextCursor < input.length ? "\n" : "");
+		cursor = nextCursor;
 		heredocRegex.lastIndex = cursor;
 		match = heredocRegex.exec(input);
 	}

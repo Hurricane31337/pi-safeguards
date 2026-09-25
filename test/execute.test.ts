@@ -482,6 +482,16 @@ describe("heredoc", () => {
 		const command = `${node} -e '${script}' <<'PY'\n    if True:\n        print(1)\n    PY`;
 		expect(runWith(command, { defaultPolicy: "allow" })).toBe("if True:\n    print(1)");
 	});
+
+	it("still runs a statement that follows a heredoc on the next line, instead of swallowing it into the heredoc command's argv", () => {
+		const output = run("wc -l <<'EOF'\nline1\nline2\nEOF\necho after-heredoc");
+		expect(output.split("\n").map((line) => line.trim())).toEqual(["2", "after-heredoc"]);
+	});
+
+	it("still runs a statement that follows a heredoc joined with ; on the next line", () => {
+		const output = run("wc -l <<'EOF'\nline1\nEOF\necho one; echo two");
+		expect(output.split("\n").map((line) => line.trim())).toEqual(["1", "one", "two"]);
+	});
 });
 
 describe("output redirection", () => {
