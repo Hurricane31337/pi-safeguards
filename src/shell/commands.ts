@@ -142,22 +142,24 @@ function grepInPath(
 	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
 	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
+	const isMatch = (line: string) => pattern.test(line) !== flags.invert;
+
+	// -l wins over -c when both are given, like real grep (this used to check
+	// countOnly first, so `grep -lc` printed counts instead of just names).
+	if (flags.filesOnly) {
+		if (lines.some(isMatch)) results.push(rel);
+		return;
+	}
+
 	if (flags.countOnly) {
 		let count = 0;
-		for (const line of lines) {
-			if (pattern.test(line) === flags.invert) continue;
-			count++;
-		}
+		for (const line of lines) if (isMatch(line)) count++;
 		results.push(showFile ? `${rel}:${count}` : String(count));
 		return;
 	}
 
 	for (let i = 0; i < lines.length; i++) {
-		if (pattern.test(lines[i]) === flags.invert) continue;
-		if (flags.filesOnly) {
-			if (!results.includes(rel)) results.push(rel);
-			return;
-		}
+		if (!isMatch(lines[i])) continue;
 		let line = "";
 		if (showFile) line += `${rel}:`;
 		if (flags.lineNumbers) line += `${i + 1}:`;
@@ -166,21 +168,44 @@ function grepInPath(
 }
 
 /**
- * Real (BRE) grep treats `\(` `\)` `\{` `\}` `\|` `\+` `\?` as the special
- * (ERE-style) form even without -E, and their unescaped counterparts as
- * literal - the opposite of a JS RegExp, which already special-cases the
- * unescaped forms and would otherwise treat e.g. `A\|B` as matching the
- * literal three-character string "A|B". This only needs to unescape those
- * six sequences; JS's own unescaped handling already covers the rest of
- * what a model reaches for.
+ * Real BRE grep treats `( ) { } | + ?` as literal characters and only their
+ * escaped form (`\(` `\)` `\{` `\}` `\|` `\+` `\?`) as the special ERE-style
+ * meaning - the exact opposite of a JS RegExp, which already treats the bare
+ * form as special and the escaped form as literal. Translating only the
+ * escaped forms (unescaping them to bare/special) used to leave the other
+ * half of that swap undone: an unescaped `(` still hit JS's native "this is
+ * a group" handling, so there was no way to write a literal parenthesis,
+ * pipe, brace or plus/question mark at all - grep 'a(b)c' matched "abc"
+ * instead of the literal text "a(b)c" a real BRE grep would find, with no
+ * escaping fix available since `\(` just produced the same group. This walks
+ * the pattern once and swaps both directions: bare -> escaped (literal),
+ * escaped -> bare (special). Everything else (`\d`, `\1` backreferences,
+ * `\.`, `\\`, and the JS-native handling of unescaped `.` `*` `^` `$` `[]`,
+ * which BRE and ERE already agree on) passes through untouched.
  */
 function bareGrepEscapesToRegex(pattern: string): string {
-	return pattern.replace(/\\([(){}|+?])/g, "$1");
+	const special = "(){}|+?";
+	let result = "";
+	for (let i = 0; i < pattern.length; i++) {
+		const ch = pattern[i];
+		if (ch === "\\" && i + 1 < pattern.length) {
+			const next = pattern[i + 1];
+			result += special.includes(next) ? next : ch + next;
+			i++;
+		} else if (special.includes(ch)) {
+			result += `\\${ch}`;
+		} else {
+			result += ch;
+		}
+	}
+	return result;
 }
 
 export function execGrep(args: string[], cwd: string, root: string, stdin: string | null): string {
 	const flags: GrepFlags = { recursive: false, lineNumbers: false, filesOnly: false, invert: false, countOnly: false };
 	let ignoreCase = false;
+	let extendedRegex = false;
+	let wordBoundary = false;
 	const patterns: string[] = [];
 	let positionalPatternTaken = false;
 	const targets: string[] = [];
@@ -202,6 +227,18 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			includeGlobText = args[++i];
 			continue;
 		}
+		// -A/-B/-C (context lines) and -m (max count) are not implemented, but
+		// their numeric operand must still be consumed here - otherwise it falls
+		// through to the generic parser below as an unrecognised flag (a no-op,
+		// correctly) followed by a bare number, which then gets read as the
+		// search PATTERN (`grep -m 1 foo file` searched for "1", not "foo", and
+		// silently listed "foo" as a second file). Matches both `-A 2` and the
+		// attached `-A2` form real grep also accepts.
+		if (/^-[ABCm]$/.test(arg) && i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+			i++;
+			continue;
+		}
+		if (/^-[ABCm]\d+$/.test(arg)) continue;
 		if (arg.startsWith("-") && arg !== "-") {
 			for (const flag of shortFlags(arg)) {
 				if (flag === "r" || flag === "R") flags.recursive = true;
@@ -210,6 +247,8 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				else if (flag === "l") flags.filesOnly = true;
 				else if (flag === "v") flags.invert = true;
 				else if (flag === "c") flags.countOnly = true;
+				else if (flag === "E") extendedRegex = true;
+				else if (flag === "w") wordBoundary = true;
 				// unknown flags are ignored
 			}
 		} else if (!positionalPatternTaken) {
@@ -226,14 +265,24 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 
 	// Multiple -e patterns OR together, same as real grep; each is wrapped in
 	// its own non-capturing group so one pattern's alternation can't bleed
-	// into another's.
-	const combined = patterns.map((p) => `(?:${bareGrepEscapesToRegex(p)})`).join("|");
+	// into another's. -E (ERE) means JS's own regex dialect already matches -
+	// no BRE translation needed, and skipping it is also what keeps -E
+	// correct now that the default (BRE) path applies one (see
+	// bareGrepEscapesToRegex): without this branch, -E patterns would get the
+	// BRE swap applied too and `grep -E 'fo+'` would stop meaning "one or
+	// more o" once bare `+` became literal by default.
+	const translate = (p: string) => (extendedRegex ? p : bareGrepEscapesToRegex(p));
+	const combined = patterns.map((p) => `(?:${translate(p)})`).join("|");
+	// -w wraps the whole alternation in word boundaries, the same way real
+	// GNU grep implements it - without this, `grep -w alph` matched "alpha"
+	// (alph is a substring, not a whole word).
+	const withBoundary = (source: string) => (wordBoundary ? `\\b(?:${source})\\b` : source);
 	let regex: RegExp;
 	try {
-		regex = new RegExp(combined, ignoreCase ? "i" : "");
+		regex = new RegExp(withBoundary(combined), ignoreCase ? "i" : "");
 	} catch {
 		const literal = patterns.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-		regex = new RegExp(literal, ignoreCase ? "i" : "");
+		regex = new RegExp(withBoundary(literal), ignoreCase ? "i" : "");
 	}
 	const includeGlob = includeGlobText !== null ? globToRegex(includeGlobText) : null;
 
@@ -280,9 +329,30 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		if (!usedRipgrep) {
 			for (const target of targets) {
 				if (isBlocked(target, root)) continue;
+				// A missing target used to fall straight into grepInPath's own
+				// silent statSync catch (there to let a recursive walk skip an
+				// entry that vanished mid-scan), so a typo'd filename looked
+				// exactly like "no matches" instead of an error - every other
+				// command here (cat, wc, uniq, sort) reports this case.
+				try {
+					statSync(target);
+				} catch {
+					const shown = relative(cwd, target).replace(/\\/g, "/") || target;
+					results.push(`grep: ${shown}: No such file or directory`);
+					continue;
+				}
 				grepInPath(target, regex, flags, root, results, showFile, includeGlob);
 			}
 		}
+		// The ripgrep fast path walks a directory tree in parallel, so the same
+		// recursive grep can come back in a different file order on every run
+		// even with nothing on disk changed - real grep's own directory walk is
+		// sequential and stable. Sort by the leading path (Array#sort is a
+		// stable sort per spec, so lines from the same file keep their original,
+		// correctly-ascending line order) to make recursive output
+		// deterministic regardless of which path produced it.
+		if (flags.recursive)
+			results.sort((a, b) => (a.split(":")[0] < b.split(":")[0] ? -1 : a.split(":")[0] > b.split(":")[0] ? 1 : 0));
 	}
 	return results.join("\n");
 }

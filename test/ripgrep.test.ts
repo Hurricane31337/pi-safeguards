@@ -70,6 +70,21 @@ describe("ripgrep fast path", () => {
 		expect(rgOutput).toBe("./src/a.txt:2:beta");
 	});
 
+	// -w is implemented by wrapping the compiled pattern in \b...\b at the
+	// regex-source level (commands.ts), which is what reaches rg via
+	// regex.source - so it works through the fast path with no dedicated
+	// ripgrep.ts option, and this proves that actually holds rather than
+	// assuming it from the JS-side implementation alone.
+	it.skipIf(!realRgPath)("matches the JS walk with -w (word boundary), embedded via \\b in regex.source", () => {
+		writeFileSync(join(root, "src", "word.txt"), "alpha\nalph\n", "utf8");
+		setRipgrepPathForTests(null);
+		const jsOutput = grep("grep -rnw alph src");
+		setRipgrepPathForTests(realRgPath);
+		const rgOutput = grep("grep -rnw alph src");
+		expect(rgOutput.split("\n").sort()).toEqual(jsOutput.split("\n").sort());
+		expect(rgOutput).toBe("./src/word.txt:2:alph");
+	});
+
 	it.skipIf(!realRgPath)("matches the JS walk with -i (ignore case)", () => {
 		setRipgrepPathForTests(null);
 		const jsOutput = grep("grep -rni ALPHA src");
@@ -108,8 +123,11 @@ describe("ripgrep fast path", () => {
 	it.skipIf(!realRgPath)("falls back to the JS walk for a pattern rg's regex engine rejects (JS lookbehind)", () => {
 		setRipgrepPathForTests(realRgPath);
 		// Rust's regex crate has no lookbehind support; ripgrep exits 2 on it,
-		// which execRipgrepGrep must treat as "fall back", not "no matches".
-		const output = grep(`grep -rn (?<=al)pha src/a.txt`);
+		// which execRipgrepGrep must treat as "fall back", not "no matches". -E
+		// is required here so the pattern reaches the regex engine unchanged -
+		// without it, bare "(" and ")" are literal (real BRE semantics), so
+		// this wouldn't be a lookbehind for either engine to reject.
+		const output = grep(`grep -rnE (?<=al)pha src/a.txt`);
 		expect(output).toBe("./src/a.txt:1:alpha");
 	});
 

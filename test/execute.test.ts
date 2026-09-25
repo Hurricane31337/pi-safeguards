@@ -224,6 +224,86 @@ describe("search", () => {
 	it("--include with no matching files finds nothing, not an error", () => {
 		expect(run("grep -rn --include=*.nope -e beta src")).toBe("");
 	});
+
+	// The reported bug: bare (unescaped) ( ) { } | + ? were already special to
+	// JS's native RegExp, so real BRE's rule - bare is literal, only the
+	// escaped form is special - was only half-implemented (escaped -> special
+	// worked, but bare was never made literal). There was no way to write a
+	// literal parenthesis, pipe, brace or plus/question mark at all: grep
+	// 'a(b)c' matched "abc" instead of the literal text a real BRE grep finds.
+	describe("bare BRE metacharacters are literal by default, matching real grep", () => {
+		beforeAll(() => {
+			writeFileSync(join(root, "src", "bre.txt"), "foo+bar\nfoobar\nabc\na(b)c\nx|y\nxy\n1{2}\n111\n", "utf8");
+		});
+
+		it("bare ( ) are literal, not a group", () => {
+			expect(run("grep 'a(b)c' src/bre.txt")).toBe("a(b)c");
+		});
+
+		it("bare | is literal, not alternation", () => {
+			expect(run("grep 'x|y' src/bre.txt")).toBe("x|y");
+		});
+
+		it("bare + is literal, not a quantifier", () => {
+			expect(run("grep 'foo+bar' src/bre.txt")).toBe("foo+bar");
+		});
+
+		it("bare {n} is literal, not an interval", () => {
+			expect(run("grep '1{2}' src/bre.txt")).toBe("1{2}");
+		});
+
+		it("a bracket expression still reaches a literal special character, as an alternative to escaping", () => {
+			expect(run("grep '[|]' src/bre.txt")).toBe("x|y");
+		});
+
+		it("-E switches to ERE, where the bare forms are special again", () => {
+			expect(run("grep -E 'a(b)c' src/bre.txt")).toBe("abc");
+			// "o+" under ERE means one-or-more "o", which "foobar" satisfies but
+			// the literal "foo+bar" (a real plus character, not a quantifier)
+			// does not.
+			expect(run("grep -E 'foo+bar' src/bre.txt")).toBe("foobar");
+		});
+	});
+
+	// Real grep -w requires whole-word matches; the emulator ignored -w
+	// entirely, so grep -w 'alph' matched "alpha" (a substring, not a word).
+	it("-w only matches whole words", () => {
+		expect(run("grep -w alph src/a.txt")).toBe("");
+		expect(run("grep -w alpha src/a.txt")).toBe("alpha");
+	});
+
+	// -A/-B/-C (context) and -m (max count) aren't implemented, but their
+	// numeric operand must not leak into pattern/target parsing - it used to
+	// fall through as a bare positional, becoming the search pattern itself
+	// while the real pattern was silently read as a (missing) filename.
+	it("-m/-A/-B/-C consume their numeric operand instead of it becoming the pattern", () => {
+		expect(run("grep -m 1 beta src/a.txt")).toBe("beta");
+		expect(run("grep -A 1 beta src/a.txt")).toBe("beta");
+		expect(run("grep -B 1 beta src/a.txt")).toBe("beta");
+		expect(run("grep -C 1 beta src/a.txt")).toBe("beta");
+		expect(run("grep -A2 beta src/a.txt")).toBe("beta");
+	});
+
+	// -l wins over -c when both are given, like real grep - this used to
+	// check -c first, so `grep -lc` printed a count instead of just the name.
+	it("-l wins over -c when both are given", () => {
+		expect(run("grep -lc beta src/a.txt")).toBe("./src/a.txt");
+	});
+
+	// grepInPath silently returned nothing for a missing file (the same catch
+	// that lets a recursive walk skip an entry that vanished mid-scan), so a
+	// typo'd filename looked exactly like "no matches" - every sibling command
+	// (cat, wc, uniq, sort) reports this case instead.
+	it("a missing file is reported, not silently treated as zero matches", () => {
+		expect(run("grep beta src/nope.txt")).toBe("grep: src/nope.txt: No such file or directory");
+	});
+
+	// The ripgrep fast path walks a tree in parallel, so recursive output
+	// order used to vary run to run with nothing on disk changed.
+	it("-r output order is deterministic across repeated identical runs", () => {
+		const first = run("grep -rn beta src");
+		for (let i = 0; i < 5; i++) expect(run("grep -rn beta src")).toBe(first);
+	});
 });
 
 describe("head/tail with a file argument", () => {
