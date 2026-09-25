@@ -327,6 +327,26 @@ describe("printf", () => {
 	});
 });
 
+describe("wc flags", () => {
+	it("honors -c (bytes) instead of always returning the line count", () => {
+		expect(run("printf abc | wc -c").trim()).toBe("3");
+	});
+
+	it("honors -w (words) instead of always returning the line count", () => {
+		expect(run(`printf 'one two three' | wc -w`).trim()).toBe("3");
+	});
+
+	it("with no flags at all, prints lines words bytes, not just lines", () => {
+		const output = run(`printf 'a b\\nc\\n' | wc`).trim();
+		expect(output.split(/\s+/)).toEqual(["2", "3", "6"]);
+	});
+
+	it("-c on a file with no trailing newline reports its byte length, not 1", () => {
+		writeFileSync(join(root, "src", "nonewline.txt"), "abc", "utf8");
+		expect(run("wc -c src/nonewline.txt")).toBe("       3 src/nonewline.txt");
+	});
+});
+
 describe("glob expansion", () => {
 	it("expands a wildcard to explicit filenames for wc", () => {
 		const output = run("wc -l src/*.log");

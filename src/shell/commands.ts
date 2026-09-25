@@ -266,12 +266,53 @@ export function execSed(args: string[], cwd: string, root: string, stdin: string
 	return lines.slice(start - 1, Number.isFinite(end) ? end : undefined).join("\n");
 }
 
+/** Word count matching real `wc -w`: runs of non-whitespace. */
+function countWords(text: string): number {
+	const trimmed = text.trim();
+	return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
+}
+
+/**
+ * `-l`/`-w`/`-c` select which counts to print, combinable (`-lc`) like real
+ * `wc`; with none given, all three print, in `lines words bytes` order,
+ * matching real `wc`'s bare behaviour. Each was previously ignored and every
+ * invocation silently returned line count alone, however the flags read.
+ */
 export function execWc(args: string[], cwd: string, root: string, stdin: string | null): string {
+	let showLines = false;
+	let showWords = false;
+	let showBytes = false;
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of arg.slice(1)) {
+				if (flag === "l") showLines = true;
+				else if (flag === "w") showWords = true;
+				else if (flag === "c") showBytes = true;
+			}
+		}
+	}
+	if (!showLines && !showWords && !showBytes) {
+		showLines = true;
+		showWords = true;
+		showBytes = true;
+	}
+
+	function counts(lines: number, words: number, bytes: number): string {
+		const parts: string[] = [];
+		if (showLines) parts.push(String(lines).padStart(8));
+		if (showWords) parts.push(String(words).padStart(8));
+		if (showBytes) parts.push(String(bytes).padStart(8));
+		return parts.join("");
+	}
+
 	const files = expandArgs(args.slice(1), cwd).filter((arg) => !arg.startsWith("-"));
 
 	if (files.length > 0) {
 		const rows: string[] = [];
-		let total = 0;
+		let totalLines = 0;
+		let totalWords = 0;
+		let totalBytes = 0;
 		for (const file of files) {
 			const path = resolve(cwd, file);
 			if (isBlocked(path, root)) {
@@ -283,15 +324,19 @@ export function execWc(args: string[], cwd: string, root: string, stdin: string 
 				rows.push(`wc: ${file}: No such file or directory`);
 				continue;
 			}
-			const count = countLines(content);
-			total += count;
-			rows.push(`${String(count).padStart(8)} ${file}`);
+			const lines = countLines(content);
+			const words = countWords(content);
+			const bytes = Buffer.byteLength(content, isSpilled(path) ? "utf8" : "latin1");
+			totalLines += lines;
+			totalWords += words;
+			totalBytes += bytes;
+			rows.push(`${counts(lines, words, bytes)} ${file}`);
 		}
-		if (files.length > 1) rows.push(`${String(total).padStart(8)} total`);
+		if (files.length > 1) rows.push(`${counts(totalLines, totalWords, totalBytes)} total`);
 		return rows.join("\n");
 	}
 	if (stdin !== null) {
-		return String(countLines(stdin)).padStart(8);
+		return counts(countLines(stdin), countWords(stdin), Buffer.byteLength(stdin, "utf8"));
 	}
 	return "0";
 }
