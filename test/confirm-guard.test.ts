@@ -40,12 +40,24 @@ function guard() {
 }
 
 describe("confirm guard", () => {
-	it("does nothing when no override is configured (missing settings file)", async () => {
+	// A missing settings file falls back to DEFAULT_SAFEGUARDS_SETTINGS (see
+	// settings.test.ts), not an empty policy - "ls" is one of the shipped
+	// overrides left at "allow", so this exercises that fallback rather than
+	// an accidentally-permissive absence of any policy at all.
+	it("does nothing for a command the shipped defaults leave at allow (missing settings file)", async () => {
 		rmSync(settingsPath, { force: true });
 		const call = guard();
 		const confirm = vi.fn();
-		expect(await call("bash", { command: "rm foo" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+		expect(await call("bash", { command: "ls" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("asks for a command the shipped defaults set to ask (missing settings file)", async () => {
+		rmSync(settingsPath, { force: true });
+		const call = guard();
+		const confirm = vi.fn().mockResolvedValue(true);
+		expect(await call("bash", { command: "rm foo" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+		expect(confirm).toHaveBeenCalledOnce();
 	});
 
 	it("ignores tools other than bash and the native grep/find/ls", async () => {
@@ -150,13 +162,31 @@ describe("confirm guard", () => {
 			expect(confirm).not.toHaveBeenCalled();
 		});
 
-		it("defaultPolicy deny (the shipped default) blocks anything not built in, without asking", async () => {
-			writeSettings({});
+		it("an explicit defaultPolicy deny blocks anything not built in, without asking", async () => {
+			writeSettings({ defaultPolicy: "deny" });
 			const call = guard();
 			const confirm = vi.fn();
 			const result = await call("bash", { command: "python -c 1" }, { hasUI: true, ui: { confirm } });
 			expect(result?.block).toBe(true);
 			expect(confirm).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("shipped defaults", () => {
+		it("defaultPolicy ask (the shipped default) asks about anything not built in", async () => {
+			writeSettings({});
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("bash", { command: "python -c 1" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("blocks on refusal the same as any other ask", async () => {
+			writeSettings({});
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(false);
+			const result = await call("bash", { command: "python -c 1" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
 		});
 	});
 

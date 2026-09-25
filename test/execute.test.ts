@@ -23,9 +23,16 @@ afterAll(() => {
 	rmSync(resolve(outsideFile, ".."), { recursive: true, force: true });
 });
 
-const run = (command: string) => executeShellCommand(command, root, root);
+// Explicit defaultPolicy: "deny", not DEFAULT_SAFEGUARDS_SETTINGS (whose
+// defaultPolicy is "ask", the shipped baseline) - this file unit-tests the
+// dispatcher's own enforcement, which is independent of whatever policy
+// ships by default. Built-in commands (cat, ls, mv, rm, …) are unaffected
+// either way: commandState() resolves them from the built-in list before it
+// ever consults defaultPolicy.
+const DENY_BY_DEFAULT: SafeguardsSettings = { commands: {}, defaultPolicy: "deny" };
+const run = (command: string) => executeShellCommand(command, root, root, DENY_BY_DEFAULT);
 const runWith = (command: string, overrides: Partial<SafeguardsSettings>) =>
-	executeShellCommand(command, root, root, { ...DEFAULT_SAFEGUARDS_SETTINGS, ...overrides });
+	executeShellCommand(command, root, root, { ...DENY_BY_DEFAULT, ...overrides });
 const node = `"${process.execPath}"`;
 
 describe("whitelist", () => {
@@ -34,7 +41,7 @@ describe("whitelist", () => {
 		expect(run("pwd")).toBe(root.replace(/\\/g, "/"));
 	});
 
-	it("refuses interpreters and shells by name, with a reason (defaultPolicy deny, the shipped default)", () => {
+	it("refuses interpreters and shells by name, with a reason (defaultPolicy deny)", () => {
 		for (const program of ["python", "node", "npm", "bash", "sh", "cmd", "powershell", "curl", "wget"]) {
 			const output = run(`${program} -c "whatever"`);
 			expect(output).toContain(`'${program}' ist deaktiviert`);
@@ -172,7 +179,7 @@ describe("rm and mv", () => {
 });
 
 describe("command policy", () => {
-	it("defaultPolicy deny (the default) refuses a command outside the built-in set", () => {
+	it("defaultPolicy deny refuses a command outside the built-in set", () => {
 		expect(run(`${node} -e "console.log(1)"`)).toContain("ist deaktiviert");
 	});
 
@@ -214,5 +221,19 @@ describe("command policy", () => {
 
 	it("an explicit ask override (already approved) runs an interpreter-like name too", () => {
 		expect(runWith('node -e "console.log(6+6)"', { commands: { node: "ask" } }).trim()).toBe("12");
+	});
+});
+
+describe("shipped defaults (DEFAULT_SAFEGUARDS_SETTINGS)", () => {
+	const runShipped = (command: string) => executeShellCommand(command, root, root, DEFAULT_SAFEGUARDS_SETTINGS);
+
+	it("does not refuse an unlisted command outright - defaultPolicy is ask, not deny", () => {
+		expect(runShipped(`${node} -e "console.log(7+7)"`).trim()).toBe("14");
+	});
+
+	it("runs rm/mv/git the same as any other built-in - 'ask' is already-approved by the time it reaches here", () => {
+		writeFileSync(join(root, "src", "shipped.txt"), "x\n", "utf8");
+		expect(runShipped("mv src/shipped.txt src/shipped2.txt")).toBe("");
+		expect(runShipped("rm src/shipped2.txt")).toBe("");
 	});
 });

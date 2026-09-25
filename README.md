@@ -12,8 +12,11 @@ Two things, both **policy** rather than behaviour:
 Supported commands: `grep [-rnilv]`, `sed -n 'X,Yp'`, `wc -l`, `head -n`, `tail -n`,
 `find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, and `|` chaining.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
-Interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …) are refused **by
-name** so the refusal says why and the model stops looking for a workaround.
+Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
+included — goes through `defaultPolicy` (see "Configuring the command policy" below): the shipped
+default is `ask`, so the model is not silently refused and not silently allowed to spawn a process,
+it is asked about by name every time. Set `defaultPolicy` to `deny` (or override a specific one of
+them) for the old refuse-outright behaviour.
 
 ## Why this is not in pi-improved
 
@@ -42,13 +45,31 @@ and pi-safeguards is explicitly meant to also run standalone in the TUI.
 /safeguards                    show the current policy (defaultPolicy + every override)
 /safeguards rm                 show one command's effective state
 /safeguards rm deny            set an override (state: deny / ask / allow)
-/safeguards rm clear           remove the override, falling back to the built-in default or defaultPolicy
+/safeguards rm clear           reset to the shipped default for rm ("ask"), or remove the
+                                override entirely for a command with no shipped default
 /safeguards default ask        set defaultPolicy itself
 ```
 
 Settings are re-read from disk on every `tool_call` (`loadSafeguardsSettings` never caches), so a
 change made through `/safeguards` takes effect on the very next `bash`/`grep`/`find`/`ls` call in the
 same session — no restart needed.
+
+### Shipped default (`DEFAULT_SAFEGUARDS_SETTINGS` in `src/settings.ts`)
+
+What a fresh install starts from, and what `loadSafeguardsSettings()` falls back to whenever
+`safeguards.json` is missing or malformed:
+
+| defaultPolicy | `ask` — an unlisted command (`python`, `npm`, `curl`, …) is confirmed, not silently run or silently refused |
+|---|---|
+
+| Command | State |
+|---|---|
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `pwd`, `sed`, `tail`, `wc` | `allow` |
+| `git`, `mv`, `rm` | `ask` |
+
+`/safeguards <command> clear` on one of these resets it back to this table's value rather than to
+the raw built-in default (which would otherwise be `allow` for all of them, since every command here
+is one of the emulator's built-ins — see `commandState()`).
 
 ## Design note: the one deliberate reimplementation
 

@@ -43,21 +43,46 @@ export interface SafeguardsSettings {
 	 * even though it is not built in.
 	 *
 	 * A name absent from this map falls back to "allow" for a built-in
-	 * emulated command (today's default), or to defaultPolicy for anything
-	 * else — there is deliberately no separate hardcoded interpreter
-	 * blocklist any more: defaultPolicy "deny" (the shipped default) already
-	 * refuses python/node/curl/etc. exactly as before, and a specific one of
-	 * them can be allowed or asked about individually here without having to
-	 * loosen the policy for everything else.
+	 * emulated command, or to defaultPolicy for anything else — there is
+	 * deliberately no separate hardcoded interpreter blocklist: defaultPolicy
+	 * governs python/node/curl/etc., and a specific one of them can be
+	 * allowed or asked about individually here without having to loosen the
+	 * policy for everything else.
 	 */
 	commands: Record<string, CommandState>;
 	/** Governs any command that is neither a built-in emulated one nor named in `commands`. */
 	defaultPolicy: CommandState;
 }
 
+/**
+ * The shipped baseline: every built-in emulated command explicit (even the
+ * ones that would resolve to "allow" anyway, since that is only true as long
+ * as it stays a built-in - see commandState()), `git`/`mv`/`rm` requiring
+ * confirmation as the destructive/networked ones, and defaultPolicy "ask" so
+ * an unlisted command (python, npm, curl, …) is confirmed rather than
+ * silently refused or silently run. This is what a fresh install starts
+ * from - loadSafeguardsSettings() falls back to it verbatim when
+ * safeguards.json is missing or malformed, and /safeguards edits it from
+ * there.
+ */
 export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
-	commands: {},
-	defaultPolicy: "deny",
+	commands: {
+		cat: "allow",
+		cd: "allow",
+		echo: "allow",
+		find: "allow",
+		git: "ask",
+		grep: "allow",
+		head: "allow",
+		ls: "allow",
+		mv: "ask",
+		pwd: "allow",
+		rm: "ask",
+		sed: "allow",
+		tail: "allow",
+		wc: "allow",
+	},
+	defaultPolicy: "ask",
 };
 
 export function getSafeguardsJsonPath(): string {
@@ -91,14 +116,19 @@ export function loadSafeguardsSettings(path: string = getSafeguardsJsonPath()): 
 
 		return {
 			commands,
-			defaultPolicy: isCommandState(parsed.defaultPolicy) ? parsed.defaultPolicy : "deny",
+			defaultPolicy: isCommandState(parsed.defaultPolicy)
+				? parsed.defaultPolicy
+				: DEFAULT_SAFEGUARDS_SETTINGS.defaultPolicy,
 		};
 	} catch {
-		// A fresh object, not the DEFAULT_SAFEGUARDS_SETTINGS singleton itself:
+		// A fresh copy, not the DEFAULT_SAFEGUARDS_SETTINGS singleton itself:
 		// the /safeguards command mutates the settings it gets back before
 		// saving, and callers comparing against DEFAULT_SAFEGUARDS_SETTINGS
 		// (toEqual, not toBe) must not be able to corrupt it by reference.
-		return { commands: {}, defaultPolicy: DEFAULT_SAFEGUARDS_SETTINGS.defaultPolicy };
+		return {
+			commands: { ...DEFAULT_SAFEGUARDS_SETTINGS.commands },
+			defaultPolicy: DEFAULT_SAFEGUARDS_SETTINGS.defaultPolicy,
+		};
 	}
 }
 

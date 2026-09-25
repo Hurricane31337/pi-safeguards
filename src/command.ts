@@ -9,7 +9,10 @@
  *   /safeguards                    - show the current policy
  *   /safeguards <command>          - show one command's effective state
  *   /safeguards <command> <state>  - set an override (state: deny/ask/allow)
- *   /safeguards <command> clear    - remove the override, falling back to the
+ *   /safeguards <command> clear    - remove the override; falls back to the
+ *                                    shipped default for that command if one
+ *                                    exists (DEFAULT_SAFEGUARDS_SETTINGS -
+ *                                    e.g. rm/mv/git ask), else to the raw
  *                                    built-in default or defaultPolicy
  *   /safeguards default <state>    - set defaultPolicy itself
  *
@@ -22,6 +25,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	type CommandState,
 	commandState,
+	DEFAULT_SAFEGUARDS_SETTINGS,
 	loadSafeguardsSettings,
 	type SafeguardsSettings,
 	saveSafeguardsSettings,
@@ -111,6 +115,17 @@ export function registerSafeguardsCommand(pi: ExtensionAPI, settingsPath?: strin
 			}
 
 			if (rawState === "clear" || rawState === "reset") {
+				const shipped = DEFAULT_SAFEGUARDS_SETTINGS.commands[name];
+				if (shipped !== undefined) {
+					if (settings.commands[name] === shipped) {
+						ctx.ui.notify(`'${name}' already matches the shipped default ("${shipped}").`, "info");
+						return;
+					}
+					settings.commands[name] = shipped;
+					saveSafeguardsSettings(settings, settingsPath);
+					ctx.ui.notify(`'${name}' reset to the shipped default ("${shipped}").`, "info");
+					return;
+				}
 				if (name in settings.commands) {
 					delete settings.commands[name];
 					saveSafeguardsSettings(settings, settingsPath);

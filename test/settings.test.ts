@@ -43,9 +43,9 @@ describe("loadSafeguardsSettings", () => {
 		});
 	});
 
-	it("treats an unrecognised defaultPolicy value as the safe default", () => {
+	it("treats an unrecognised defaultPolicy value as the shipped default", () => {
 		writeFileSync(path, JSON.stringify({ defaultPolicy: "yolo" }), "utf8");
-		expect(loadSafeguardsSettings(path).defaultPolicy).toBe("deny");
+		expect(loadSafeguardsSettings(path).defaultPolicy).toBe(DEFAULT_SAFEGUARDS_SETTINGS.defaultPolicy);
 	});
 
 	it("drops a command entry with an unrecognised state instead of throwing", () => {
