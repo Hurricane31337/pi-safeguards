@@ -9,11 +9,14 @@ Two things, both **policy** rather than behaviour:
 | pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
 
-Supported commands: `grep [-rnilvc]` (`-c` with an empty pattern counts every line, like real
-`grep -c ""`), `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`,
-`printf 'fmt' [args...]` (`\n`/`\t` escapes and `%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating
-the format over extra args like real `printf`), `head -n`, `tail -n` (both accept a file argument or
-stdin), `find [-name] [-type f/d] [-maxdepth]` (root-relative paths, like `./src/x.ts`), `cat`,
+Supported commands: `grep [-rnilvc] [-e PATTERN]...` (`-c` with an empty pattern counts every line,
+like real `grep -c ""`; `\(` `\)` `\{` `\}` `\|` `\+` `\?` act as the special ERE form even without
+`-E`, like real BRE grep; repeating `-e` ORs the patterns together), `sed -n 'X,Yp'`, `wc -l`,
+`uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`, `printf 'fmt' [args...]` (`\n`/`\t` escapes and
+`%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating the format over extra args like real `printf`),
+`head -n`, `tail -n` (both accept one or more file arguments, or stdin, with an `==> name <==` header
+per file when given more than one), `find [-name] [-type f/d] [-maxdepth]` (root-relative paths, like
+`./src/x.ts`), `cat` (reads stdin when given no file, like real `cat` in a `x | cat` pass-through),
 `ls [-d]`, `echo`, `pwd`, `git`, `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
 heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
@@ -143,6 +146,13 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
   `cd: no such file or directory: <target>` and leaves `workingDir` untouched. `cd` to a path
   *outside* the sandbox is unrelated and stays a deliberate silent no-op (see the comment in
   `execute.ts` - a refusal message there would have to quote the walked path).
+- **A JS `RegExp` and real (BRE) `grep` disagree about which form of `|`/`(`/`)`/`{`/`}`/`+`/`?` is
+  special.** Real grep without `-E` treats the *escaped* forms (`\|`, `\(`, …) as the special one and
+  the bare forms as literal; a JS `RegExp` is the other way around. `grep "A\|B"` therefore matched
+  nothing until `bareGrepEscapesToRegex()` (`commands.ts`) unescaped those six sequences before
+  building the pattern. `-e PATTERN` had a related but separate bug: it was never recognised as a
+  value-taking flag, so `-e`'s value silently became the positional pattern (or, on a second `-e`, a
+  search target) instead of being OR'd in.
 - **A common Unix command missing from `SUPPORTED_COMMANDS` doesn't get refused - it silently spawns
   the real program of that name via `execExternal`, once approved.** This bit us for real: `sort`
   wasn't emulated, so `sort` resolved to Windows' own `sort.exe` (cmd.exe's, not GNU's), which

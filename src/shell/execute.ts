@@ -110,7 +110,7 @@ function executeSegment(
 			case "find":
 				return execFind(args, cwd, root);
 			case "cat":
-				return execCat(args, cwd, root);
+				return execCat(args, cwd, root, stdin);
 			case "ls":
 				return execLs(args, cwd, root);
 			case "rm":

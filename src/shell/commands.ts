@@ -141,15 +141,34 @@ function grepInPath(
 	}
 }
 
+/**
+ * Real (BRE) grep treats `\(` `\)` `\{` `\}` `\|` `\+` `\?` as the special
+ * (ERE-style) form even without -E, and their unescaped counterparts as
+ * literal - the opposite of a JS RegExp, which already special-cases the
+ * unescaped forms and would otherwise treat e.g. `A\|B` as matching the
+ * literal three-character string "A|B". This only needs to unescape those
+ * six sequences; JS's own unescaped handling already covers the rest of
+ * what a model reaches for.
+ */
+function bareGrepEscapesToRegex(pattern: string): string {
+	return pattern.replace(/\\([(){}|+?])/g, "$1");
+}
+
 export function execGrep(args: string[], cwd: string, root: string, stdin: string | null): string {
 	const flags: GrepFlags = { recursive: false, lineNumbers: false, filesOnly: false, invert: false, countOnly: false };
 	let ignoreCase = false;
-	let pattern: string | null = null;
+	const patterns: string[] = [];
+	let positionalPatternTaken = false;
 	const targets: string[] = [];
 
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--") continue;
+		if (arg === "-e" && i + 1 < args.length) {
+			patterns.push(args[++i]);
+			positionalPatternTaken = true;
+			continue;
+		}
 		if (arg.startsWith("-") && arg !== "-") {
 			for (const flag of arg.slice(1)) {
 				if (flag === "r" || flag === "R") flags.recursive = true;
@@ -160,20 +179,28 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				else if (flag === "c") flags.countOnly = true;
 				// unknown flags are ignored
 			}
-		} else if (pattern === null) pattern = arg;
-		else targets.push(resolve(cwd, arg));
+		} else if (!positionalPatternTaken) {
+			patterns.push(arg);
+			positionalPatternTaken = true;
+		} else targets.push(resolve(cwd, arg));
 	}
 
-	// `!pattern` would also reject an explicitly empty pattern ("" is falsy),
-	// but grep -c "" file is a real, meaningful invocation - an empty regex
-	// matches every line, so it should count all of them, not print nothing.
-	if (pattern === null) return "(grep: no pattern)";
+	// No patterns at all (never a bare "-e", never a positional one) means no
+	// pattern was given; an explicitly empty pattern ("" from -e or as the
+	// positional) is a real, meaningful invocation - an empty regex matches
+	// every line, so grep -c "" should count all of them, not print nothing.
+	if (patterns.length === 0) return "(grep: no pattern)";
 
+	// Multiple -e patterns OR together, same as real grep; each is wrapped in
+	// its own non-capturing group so one pattern's alternation can't bleed
+	// into another's.
+	const combined = patterns.map((p) => `(?:${bareGrepEscapesToRegex(p)})`).join("|");
 	let regex: RegExp;
 	try {
-		regex = new RegExp(pattern, ignoreCase ? "i" : "");
+		regex = new RegExp(combined, ignoreCase ? "i" : "");
 	} catch {
-		regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), ignoreCase ? "i" : "");
+		const literal = patterns.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+		regex = new RegExp(literal, ignoreCase ? "i" : "");
 	}
 
 	const results: string[] = [];
@@ -318,11 +345,14 @@ export function execUniq(args: string[], cwd: string, root: string, stdin: strin
 }
 
 /**
- * The positional file argument for head/tail, skipping over -n's own value
+ * Every positional file argument for head/tail, skipping over -n's own value
  * (`-n 3 file.txt`) and the old-style `-N` count form (`-3 file.txt`) so
- * neither is mistaken for a filename.
+ * neither is mistaken for a filename. Real head/tail accept more than one
+ * file and print an `==> name <==` header before each when there is more
+ * than one - single-file output stays bare, unchanged from before.
  */
-function fileArgFor(args: string[]): string | null {
+function fileArgsFor(args: string[]): string[] {
+	const files: string[] = [];
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "-n") {
@@ -331,42 +361,68 @@ function fileArgFor(args: string[]): string | null {
 		}
 		if (/^-\d+$/.test(arg)) continue;
 		if (arg.startsWith("-")) continue;
-		return arg;
+		files.push(arg);
 	}
-	return null;
+	return files;
 }
 
 export function execHead(args: string[], cwd: string, root: string, stdin: string | null): string {
-	const file = fileArgFor(args);
-	if (file) {
+	const files = fileArgsFor(args);
+	const count = parseLineCount(args, 10);
+	if (files.length === 0) {
+		return (stdin ?? "").split("\n").slice(0, count).join("\n");
+	}
+
+	const sections: string[] = [];
+	for (const file of files) {
 		const path = resolve(cwd, file);
-		if (isBlocked(path, root)) return "Access denied: path outside project.";
+		if (isBlocked(path, root)) {
+			sections.push("Access denied: path outside project.");
+			continue;
+		}
 		const content = readFileSafe(path);
-		if (content === null) return `head: ${file}: No such file or directory`;
+		if (content === null) {
+			sections.push(`head: ${file}: No such file or directory`);
+			continue;
+		}
 		const lines = content.split("\n");
 		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-		return lines.slice(0, parseLineCount(args, 10)).join("\n");
+		const body = lines.slice(0, count).join("\n");
+		sections.push(files.length > 1 ? `==> ${file} <==\n${body}` : body);
 	}
-	return (stdin ?? "").split("\n").slice(0, parseLineCount(args, 10)).join("\n");
+	return sections.join("\n\n");
 }
 
 export function execTail(args: string[], cwd: string, root: string, stdin: string | null): string {
-	const file = fileArgFor(args);
-	let content: string;
-	if (file) {
-		const path = resolve(cwd, file);
-		if (isBlocked(path, root)) return "Access denied: path outside project.";
-		const read = readFileSafe(path);
-		if (read === null) return `tail: ${file}: No such file or directory`;
-		content = read;
-	} else {
-		content = stdin ?? "";
+	const files = fileArgsFor(args);
+	const count = parseLineCount(args, 10);
+	if (files.length === 0) {
+		const lines = (stdin ?? "").split("\n");
+		// A trailing newline terminates the last line, it does not start an
+		// empty one — counting it would shift the window by one against what
+		// tail prints.
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		return lines.slice(Math.max(0, lines.length - count)).join("\n");
 	}
-	const lines = content.split("\n");
-	// A trailing newline terminates the last line, it does not start an empty
-	// one — counting it would shift the window by one against what tail prints.
-	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-	return lines.slice(Math.max(0, lines.length - parseLineCount(args, 10))).join("\n");
+
+	const sections: string[] = [];
+	for (const file of files) {
+		const path = resolve(cwd, file);
+		if (isBlocked(path, root)) {
+			sections.push("Access denied: path outside project.");
+			continue;
+		}
+		const read = readFileSafe(path);
+		if (read === null) {
+			sections.push(`tail: ${file}: No such file or directory`);
+			continue;
+		}
+		const lines = read.split("\n");
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		const body = lines.slice(Math.max(0, lines.length - count)).join("\n");
+		sections.push(files.length > 1 ? `==> ${file} <==\n${body}` : body);
+	}
+	return sections.join("\n\n");
 }
 
 /** `-r` reverses, `-u` dedupes adjacent-after-sort lines, `-n` compares numerically instead of lexically. */
@@ -531,10 +587,13 @@ export function execFind(args: string[], cwd: string, root: string): string {
 	return results.join("\n");
 }
 
-export function execCat(args: string[], cwd: string, root: string): string {
-	return args
-		.slice(1)
-		.filter((arg) => !arg.startsWith("-"))
+export function execCat(args: string[], cwd: string, root: string, stdin: string | null): string {
+	const files = args.slice(1).filter((arg) => !arg.startsWith("-"));
+	// Real cat with no file operands reads stdin - the classic `x | cat` or
+	// `x | cat -A` pass-through. Without this, piping into cat with nothing
+	// else silently produced no output at all.
+	if (files.length === 0) return stdin ?? "";
+	return files
 		.map((file) => {
 			const path = resolve(cwd, file);
 			if (isBlocked(path, root)) return `Access denied: ${file}`;

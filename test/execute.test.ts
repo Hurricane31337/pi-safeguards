@@ -180,6 +180,28 @@ describe("search", () => {
 	it("an empty pattern with no -c matches (and prints) every line", () => {
 		expect(run("grep '' src/a.txt")).toBe("alpha\nbeta\ngamma");
 	});
+
+	// Real (BRE) grep treats \| as alternation even without -E; a JS RegExp
+	// does the opposite (\| means a literal "|" character), so grep "A\|B"
+	// matched nothing instead of either line.
+	it(String.raw`\| is alternation, like real BRE grep, not a literal pipe`, () => {
+		expect(run(String.raw`grep 'alpha\|gamma' src/a.txt`)).toBe("alpha\ngamma");
+	});
+
+	it("-E with an unescaped | still works, unaffected by the BRE translation", () => {
+		expect(run("grep -E 'alpha|gamma' src/a.txt")).toBe("alpha\ngamma");
+	});
+
+	// -e wasn't recognised as a value-taking flag at all: its value fell
+	// through and got treated as the pattern (first -e) or a target (every
+	// -e after that), so only the first -e's value ever mattered.
+	it("-e PATTERN is recognised, and repeating it ORs the patterns together", () => {
+		expect(run("grep -e alpha -e gamma src/a.txt")).toBe("alpha\ngamma");
+	});
+
+	it("-e still works combined with other flags", () => {
+		expect(run("grep -ic -e ALPHA -e GAMMA src/a.txt")).toBe("2");
+	});
 });
 
 describe("head/tail with a file argument", () => {
@@ -209,6 +231,33 @@ describe("head/tail with a file argument", () => {
 
 	it("reports a missing file rather than silently returning nothing", () => {
 		expect(run("head src/does-not-exist.txt")).toContain("No such file or directory");
+	});
+
+	// head/tail only ever read a single file argument - a second missing
+	// file's error never surfaced at all, and multiple real files were
+	// silently collapsed into just the first one.
+	it("head accepts more than one file, with an ==> name <== header for each", () => {
+		expect(run("head -n 1 src/a.txt src/b.log")).toBe("==> src/a.txt <==\nalpha\n\n==> src/b.log <==\nbeta only");
+	});
+
+	it("tail accepts more than one file, with an ==> name <== header for each", () => {
+		expect(run("tail -n 1 src/a.txt src/b.log")).toBe("==> src/a.txt <==\ngamma\n\n==> src/b.log <==\nbeta only");
+	});
+
+	it("head reports every missing file among several, not just the first", () => {
+		const output = run("head src/does-not-exist-1.txt src/does-not-exist-2.txt");
+		expect(output).toContain("does-not-exist-1.txt: No such file or directory");
+		expect(output).toContain("does-not-exist-2.txt: No such file or directory");
+	});
+});
+
+describe("cat", () => {
+	it("reads stdin when given no file operand, like real cat (x | cat pass-through)", () => {
+		expect(run("echo hi | cat")).toBe("hi");
+	});
+
+	it("still prefers a file argument over stdin when both are present", () => {
+		expect(run("echo ignored | cat src/a.txt")).toContain("alpha");
 	});
 });
 
