@@ -75,7 +75,7 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"[--include=GLOB] [--exclude-dir=GLOB] (-c with an empty pattern counts every line, like real grep " +
 			'-c ""; real BRE dialect by default - ( ) { } | + ? are literal unless backslash-escaped, in which ' +
 			"case they take the special ERE meaning (\\( \\) \\{ \\} \\| \\+ \\?); -E switches to ERE, where the " +
-			"bare forms are special instead; -w matches whole words only; -o prints only the matched text, one " +
+			"bare forms are special instead; -w (or --word-regexp) matches whole words only; -o prints only the matched text, one " +
 			"line per match; -q suppresses all output; -h/-H force the filename prefix off/on regardless of " +
 			"target count; repeating -e ORs the patterns together; -l wins over -c when both are given; -r " +
 			"descends into dot-directories too (only .git and node_modules are skipped, not every hidden " +
@@ -87,7 +87,8 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"(\\n/\\t escapes and %s/%d/%f/%o/%x/%X substitution, repeating the format over extra args like " +
 			"real printf), head -n, tail -n (accept one or more file arguments, or stdin, with an " +
 			"==> name <== header per file when given more than one), find [-name] [-type f/d] [-maxdepth] " +
-			"(paths are root-relative, like ./src/x), cat (reads stdin when given no file, like real cat in " +
+			"(paths are root-relative, like ./src/x; descends into dot-directories too, same as grep -r, " +
+			"except .git and node_modules), cat (reads stdin when given no file, like real cat in " +
 			"a `x | cat` pass-through), ls [-d], cd, rm [-rf], mv, echo, pwd. " +
 			"Glob patterns like *.py are expanded for wc, rm and mv. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +

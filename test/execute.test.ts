@@ -272,6 +272,14 @@ describe("search", () => {
 		expect(run("grep -w alpha src/a.txt")).toBe("alpha");
 	});
 
+	// --word-regexp is -w's long form; it used to be silently dropped while
+	// -w worked, so the same search gave two different answers depending only
+	// on which spelling was used.
+	it("--word-regexp behaves the same as its short form -w", () => {
+		expect(run("grep --word-regexp alph src/a.txt")).toBe("");
+		expect(run("grep --word-regexp alpha src/a.txt")).toBe("alpha");
+	});
+
 	// -A/-B/-C (context) and -m (max count) aren't implemented, but their
 	// numeric operand must not leak into pattern/target parsing - it used to
 	// fall through as a bare positional, becoming the search pattern itself
@@ -308,11 +316,14 @@ describe("search", () => {
 	// A directory operand without -r used to fall straight into grepInPath's
 	// "not recursive, stop here" branch with no message at all, so
 	// `grep foo src/` (forgetting -r, a common typo) looked exactly like a
-	// clean "not found" instead of the refusal real grep gives.
+	// clean "not found" instead of the refusal real grep gives. The message
+	// echoes the operand as typed (cwd-relative), the same convention every
+	// other error in this emulator uses (cat/wc/uniq/.../rm's own "Is a
+	// directory") - not match output's root-relative "./" labeling.
 	it("a directory without -r is reported, not silently treated as zero matches", () => {
-		expect(run("grep beta src")).toBe("grep: ./src: Is a directory");
-		expect(run("grep -c beta src")).toBe("grep: ./src: Is a directory");
-		expect(run("grep -l beta src")).toBe("grep: ./src: Is a directory");
+		expect(run("grep beta src")).toBe("grep: src: Is a directory");
+		expect(run("grep -c beta src")).toBe("grep: src: Is a directory");
+		expect(run("grep -l beta src")).toBe("grep: src: Is a directory");
 	});
 
 	describe("-r directory traversal", () => {
@@ -337,6 +348,14 @@ describe("search", () => {
 			const output = run("grep -rn --exclude-dir=.hidden beta src");
 			expect(output).not.toContain(".hidden");
 			expect(output).toContain("./src/a.txt:2:beta");
+		});
+
+		// find used the same "skip anything starting with a dot" filter grep -r
+		// just had removed, so the two commands disagreed about the exact same
+		// tree: find could not see a file grep -r already reported.
+		it("find also descends into dot-directories other than .git, agreeing with grep -r", () => {
+			expect(run("find src -name h.txt")).toBe("./src/.hidden/h.txt");
+			expect(run("find src -name g.txt")).toBe("");
 		});
 	});
 

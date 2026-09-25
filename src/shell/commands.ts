@@ -107,7 +107,12 @@ function grepInPath(
 	showFile: boolean,
 	includeGlob: RegExp | null,
 	excludeDirGlob: RegExp | null,
-	isTopLevelTarget: boolean,
+	// The operand as typed (cwd-relative), or null for an entry reached by
+	// recursing rather than named directly - only the former gets the
+	// "Is a directory" message, using the same cwd-relative, echo-the-operand
+	// convention every other error in this emulator uses (cat/wc/uniq/sort/
+	// head/tail/ls/rm), not match output's root-relative "./" labeling.
+	topLevelLabel: string | null,
 ): void {
 	let stat: ReturnType<typeof statSync>;
 	try {
@@ -115,19 +120,17 @@ function grepInPath(
 	} catch {
 		return;
 	}
-	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
 	if (stat.isDirectory()) {
 		if (!flags.recursive) {
-			// Only a target named directly by the model gets this message - a
-			// directory reached while already recursing (flags.recursive is
+			// A directory reached while already recursing (flags.recursive is
 			// true there, so this branch never runs for it) is meant to be
 			// walked, not reported. Real grep says the same thing and refuses
 			// to search a directory without -r; this used to be a silent
 			// no-op indistinguishable from "no matches", which made `grep foo
 			// src/` (forgetting -r, the single most common grep typo) look
 			// like a confident, wrong "not found".
-			if (isTopLevelTarget) results.push(`grep: ${rel}: Is a directory`);
+			if (topLevelLabel !== null) results.push(`grep: ${topLevelLabel}: Is a directory`);
 			return;
 		}
 		let entries: string[];
@@ -144,10 +147,11 @@ function grepInPath(
 			// dot-config directory used to be silently invisible to -r).
 			if (entry === ".git" || entry === "node_modules") continue;
 			if (excludeDirGlob?.test(entry)) continue;
-			grepInPath(join(path, entry), pattern, flags, root, results, showFile, includeGlob, excludeDirGlob, false);
+			grepInPath(join(path, entry), pattern, flags, root, results, showFile, includeGlob, excludeDirGlob, null);
 		}
 		return;
 	}
+	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 	// --include filters files only, never the directories on the way to them -
 	// same as real grep, where the glob matches basenames of things it would
 	// otherwise search, not the path it walks to get there.
@@ -276,6 +280,13 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			excludeDirGlobText = args[++i];
 			continue;
 		}
+		// --word-regexp is -w's long form; without this it silently did
+		// nothing while -w worked, so the same search gave two different
+		// answers depending only on which spelling was used.
+		if (arg === "--word-regexp") {
+			wordBoundary = true;
+			continue;
+		}
 		// -A/-B/-C (context lines) and -m (max count) are not implemented, but
 		// their numeric operand must still be consumed here - otherwise it falls
 		// through to the generic parser below as an unrecognised flag (a no-op,
@@ -397,6 +408,14 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		if (!usedRipgrep) {
 			for (const target of targets) {
 				if (isBlocked(target, root)) continue;
+				// Every other error message in this emulator (cat/wc/uniq/sort/
+				// head/tail/ls/rm's own "Is a directory") echoes the operand as
+				// typed, cwd-relative - not the root-relative "./" form match
+				// output uses. The "Is a directory" message below used to be the
+				// one exception, built from the same root-relative `rel` a
+				// successful match line gets, so the two error kinds a single
+				// grep call can produce disagreed on which path convention to use.
+				const shown = relative(cwd, target).replace(/\\/g, "/") || target;
 				// A missing target used to fall straight into grepInPath's own
 				// silent statSync catch (there to let a recursive walk skip an
 				// entry that vanished mid-scan), so a typo'd filename looked
@@ -405,11 +424,10 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 				try {
 					statSync(target);
 				} catch {
-					const shown = relative(cwd, target).replace(/\\/g, "/") || target;
 					results.push(`grep: ${shown}: No such file or directory`);
 					continue;
 				}
-				grepInPath(target, regex, flags, root, results, showFile, includeGlob, excludeDirGlob, true);
+				grepInPath(target, regex, flags, root, results, showFile, includeGlob, excludeDirGlob, shown);
 			}
 		}
 		// The ripgrep fast path walks a directory tree in parallel, so the same
@@ -796,7 +814,12 @@ function findWalk(
 		return;
 	}
 	for (const entry of entries) {
-		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+		// Matches grepInPath's own exclusion (see its comment): real find
+		// descends into dot-directories too, so only .git and node_modules are
+		// skipped - not every hidden entry. This used to disagree with grep -r
+		// on the exact same tree (find . -name h.txt found nothing for a file
+		// grep -r could see).
+		if (entry.name === ".git" || entry.name === "node_modules") continue;
 		const full = join(dir, entry.name);
 		if (isOutside(full, root)) continue;
 		const isDir = entry.isDirectory();
