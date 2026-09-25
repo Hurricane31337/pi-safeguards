@@ -13,6 +13,7 @@ import piSafeguards from "../src/index.js";
 function load(cwd: string) {
 	const tools: ToolDefinition[] = [];
 	const events: string[] = [];
+	const commands: string[] = [];
 	const api = {
 		on: (event: string) => {
 			events.push(event);
@@ -20,10 +21,13 @@ function load(cwd: string) {
 		registerTool: (tool: ToolDefinition) => {
 			tools.push(tool);
 		},
+		registerCommand: (name: string) => {
+			commands.push(name);
+		},
 	} as unknown as ExtensionAPI;
 
 	piSafeguards(api, { cwd } as ExtensionContext);
-	return { tools, events };
+	return { tools, events, commands };
 }
 
 let root: string;
@@ -42,6 +46,11 @@ describe("extension wiring", () => {
 		const { tools, events } = load(root);
 		expect(tools.map((tool) => tool.name)).toEqual(["bash"]);
 		expect(events).toContain("tool_call");
+	});
+
+	it("registers the /safeguards command", () => {
+		const { commands } = load(root);
+		expect(commands).toContain("safeguards");
 	});
 
 	it("announces the truncation contract in the tool description", () => {

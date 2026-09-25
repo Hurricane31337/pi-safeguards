@@ -31,6 +31,25 @@ Loading it in a TUI session is still useful for exactly one thing — reproducin
 pi -e ../pi-safeguards/src/index.ts
 ```
 
+## Configuring the command policy
+
+Each command's state (`deny` / `ask` / `allow`, see `src/settings.ts`) lives in `safeguards.json` and
+can be edited three ways: the Visual Studio Model Settings panel, hand-editing the file, or the
+`/safeguards` slash command — the only option a terminal-only session has, since it has no IDE panel
+and pi-safeguards is explicitly meant to also run standalone in the TUI.
+
+```
+/safeguards                    show the current policy (defaultPolicy + every override)
+/safeguards rm                 show one command's effective state
+/safeguards rm deny            set an override (state: deny / ask / allow)
+/safeguards rm clear           remove the override, falling back to the built-in default or defaultPolicy
+/safeguards default ask        set defaultPolicy itself
+```
+
+Settings are re-read from disk on every `tool_call` (`loadSafeguardsSettings` never caches), so a
+change made through `/safeguards` takes effect on the very next `bash`/`grep`/`find`/`ls` call in the
+same session — no restart needed.
+
 ## Design note: the one deliberate reimplementation
 
 The house rule (`pi-improved/README.md`) is *never reimplement a pi behaviour we only want to

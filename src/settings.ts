@@ -20,8 +20,8 @@
  * never runs under a branded config layout.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -94,8 +94,25 @@ export function loadSafeguardsSettings(path: string = getSafeguardsJsonPath()): 
 			defaultPolicy: isCommandState(parsed.defaultPolicy) ? parsed.defaultPolicy : "deny",
 		};
 	} catch {
-		return DEFAULT_SAFEGUARDS_SETTINGS;
+		// A fresh object, not the DEFAULT_SAFEGUARDS_SETTINGS singleton itself:
+		// the /safeguards command mutates the settings it gets back before
+		// saving, and callers comparing against DEFAULT_SAFEGUARDS_SETTINGS
+		// (toEqual, not toBe) must not be able to corrupt it by reference.
+		return { commands: {}, defaultPolicy: DEFAULT_SAFEGUARDS_SETTINGS.defaultPolicy };
 	}
+}
+
+/**
+ * Persists settings to disk, creating the config directory if it does not
+ * exist yet (a fresh install has no safeguards.json until something writes
+ * one). The only caller today is the `/safeguards` command; nothing else in
+ * this extension mutates settings, and loadSafeguardsSettings() keeps
+ * re-reading the file rather than caching it, so a save here is visible to
+ * the very next tool_call.
+ */
+export function saveSafeguardsSettings(settings: SafeguardsSettings, path: string = getSafeguardsJsonPath()): void {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(settings, null, "\t")}\n`, "utf8");
 }
 
 /**

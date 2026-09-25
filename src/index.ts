@@ -25,6 +25,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { registerSafeguardsCommand } from "./command.ts";
 import { registerConfirmGuard } from "./confirm-guard.ts";
 import { registerPathGuard } from "./path-guard.ts";
 import { createEmulatedBashTool } from "./shell/tool.ts";
@@ -34,5 +35,6 @@ export default function piSafeguards(pi: ExtensionAPI, ctx?: ExtensionContext) {
 
 	registerPathGuard(pi);
 	registerConfirmGuard(pi);
+	registerSafeguardsCommand(pi);
 	pi.registerTool(createEmulatedBashTool(cwd));
 }

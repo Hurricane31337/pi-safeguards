@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
 	DEFAULT_SAFEGUARDS_SETTINGS,
 	getSafeguardsJsonPath,
 	loadSafeguardsSettings,
+	saveSafeguardsSettings,
 } from "../src/settings.js";
 
 const dir = mkdtempSync(join(tmpdir(), "safeguards-settings-"));
@@ -60,6 +61,21 @@ describe("loadSafeguardsSettings", () => {
 	it("ignores a non-object commands value instead of throwing", () => {
 		writeFileSync(path, JSON.stringify({ commands: "not-an-object" }), "utf8");
 		expect(loadSafeguardsSettings(path).commands).toEqual({});
+	});
+});
+
+describe("saveSafeguardsSettings", () => {
+	it("writes settings that loadSafeguardsSettings reads back unchanged", () => {
+		const settings = { commands: { rm: "deny", npm: "ask" }, defaultPolicy: "allow" } as const;
+		saveSafeguardsSettings(settings, path);
+		expect(loadSafeguardsSettings(path)).toEqual(settings);
+	});
+
+	it("creates the config directory if it does not exist yet", () => {
+		const nestedPath = join(dir, "fresh-subdir", "safeguards.json");
+		expect(existsSync(nestedPath)).toBe(false);
+		saveSafeguardsSettings(DEFAULT_SAFEGUARDS_SETTINGS, nestedPath);
+		expect(loadSafeguardsSettings(nestedPath)).toEqual(DEFAULT_SAFEGUARDS_SETTINGS);
 	});
 });
 
