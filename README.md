@@ -73,6 +73,11 @@ Settings are re-read from disk on every `tool_call` (`loadSafeguardsSettings` ne
 change made through `/safeguards` takes effect on the very next `bash`/`grep`/`find`/`ls` call in the
 same session — no restart needed.
 
+`/safeguards` with no arguments also lists every **pseudo-command** (`PSEUDO_COMMANDS` in
+`src/settings.ts` — today just `"redirect"`, see below) that has no explicit override yet, under
+"Also configurable", precisely so it doesn't have to be discovered by reading source: a pseudo-command
+names an emulator *behaviour*, not a program, so there is no other way to learn it is even settable.
+
 ### Shipped default (`DEFAULT_SAFEGUARDS_SETTINGS` in `src/settings.ts`)
 
 What a fresh install starts from, and what `loadSafeguardsSettings()` falls back to whenever

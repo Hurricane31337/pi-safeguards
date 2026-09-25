@@ -22,7 +22,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "./settings.ts";
+import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
 import {
 	extractHeredocs,
@@ -64,7 +64,7 @@ function programsIn(command: string): string[] {
 		}
 
 		const redirect = extractRedirect(statement);
-		if (redirect && !isNullTarget(redirect.target)) programs.push("redirect");
+		if (redirect && !isNullTarget(redirect.target)) programs.push(REDIRECT_COMMAND);
 		const toInspect = redirect ? redirect.command : statement;
 
 		for (const segment of splitByPipes(toInspect)) {

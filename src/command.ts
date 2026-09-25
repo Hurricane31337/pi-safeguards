@@ -27,6 +27,7 @@ import {
 	commandState,
 	DEFAULT_SAFEGUARDS_SETTINGS,
 	loadSafeguardsSettings,
+	PSEUDO_COMMANDS,
 	type SafeguardsSettings,
 	saveSafeguardsSettings,
 } from "./settings.ts";
@@ -38,6 +39,13 @@ function isCommandState(value: string): value is CommandState {
 	return (STATES as readonly string[]).includes(value);
 }
 
+/**
+ * Shows every explicit override, then any pseudo-command (see
+ * settings.ts's PSEUDO_COMMANDS - today just "redirect") that has none, so
+ * it stays visible and settable even before a user has ever touched it. A
+ * pseudo-command isn't a program a model would type, so there's no other
+ * way to learn it exists short of reading the source or this README.
+ */
 function describePolicy(settings: SafeguardsSettings): string {
 	const entries = Object.entries(settings.commands).sort(([a], [b]) => a.localeCompare(b));
 	const lines = [`defaultPolicy: ${settings.defaultPolicy}`];
@@ -47,6 +55,13 @@ function describePolicy(settings: SafeguardsSettings): string {
 		lines.push("Overrides:");
 		for (const [name, state] of entries) lines.push(`  ${name}: ${state}`);
 	}
+
+	const unset = PSEUDO_COMMANDS.filter((name) => !(name in settings.commands));
+	if (unset.length > 0) {
+		lines.push("Also configurable (not a program - an emulator behaviour):");
+		for (const name of unset) lines.push(`  ${name}: ${settings.defaultPolicy} (via defaultPolicy, no override set)`);
+	}
+
 	return lines.join("\n");
 }
 
@@ -59,7 +74,7 @@ export function registerSafeguardsCommand(pi: ExtensionAPI, settingsPath?: strin
 			const spaceIndex = trimmed.indexOf(" ");
 
 			if (spaceIndex === -1) {
-				const known = new Set<string>(["default", ...SUPPORTED_COMMANDS]);
+				const known = new Set<string>(["default", ...SUPPORTED_COMMANDS, ...PSEUDO_COMMANDS]);
 				for (const name of Object.keys(loadSafeguardsSettings(settingsPath).commands)) known.add(name);
 				const candidates = [...known].filter((name) => name.startsWith(trimmed)).sort();
 				return candidates.length > 0 ? candidates.map((value) => ({ value, label: value })) : null;

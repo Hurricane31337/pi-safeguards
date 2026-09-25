@@ -85,6 +85,21 @@ export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
 	defaultPolicy: "ask",
 };
 
+/**
+ * "Program" names commandState() accepts that are not something a model
+ * would ever type as argv[0] - they name an emulator *behaviour* instead,
+ * gated by the exact same deny/ask/allow machinery as a real command so it
+ * doesn't become an ungoverned special case. "redirect" is the only one
+ * today: a `>`/`>>` write (execute.ts's applyRedirect(), confirm-guard.ts's
+ * programsIn()). Listed here, not just used as a string literal at each call
+ * site, so /safeguards' no-args listing (command.ts's describePolicy) can
+ * surface it even with no override set - otherwise a pseudo-command with no
+ * entry in `commands` is invisible to a user who has no way to guess it
+ * exists.
+ */
+export const REDIRECT_COMMAND = "redirect";
+export const PSEUDO_COMMANDS = [REDIRECT_COMMAND] as const;
+
 export function getSafeguardsJsonPath(): string {
 	return process.env.PI_SAFEGUARDS_JSON_PATH || join(getAgentDir(), "safeguards.json");
 }

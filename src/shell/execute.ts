@@ -10,7 +10,7 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isBlocked, isOutside } from "../paths.ts";
-import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "../settings.ts";
+import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "../settings.ts";
 import {
 	execCat,
 	execFind,
@@ -167,7 +167,7 @@ function applyRedirect(
 ): string | null {
 	if (isNullTarget(redirect.target)) return null;
 
-	if (commandState("redirect", settings, SUPPORTED_COMMANDS) === "deny") {
+	if (commandState(REDIRECT_COMMAND, settings, SUPPORTED_COMMANDS) === "deny") {
 		return "[bash-emulator] '>' ist deaktiviert (Einstellungen).";
 	}
 

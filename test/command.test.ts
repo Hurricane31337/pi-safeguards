@@ -47,6 +47,22 @@ describe("/safeguards command", () => {
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("rm: ask"), "info");
 	});
 
+	it("surfaces the 'redirect' pseudo-command even with no override set", async () => {
+		const { call, notify } = command();
+		await call("");
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("redirect: ask (via defaultPolicy"), "info");
+	});
+
+	it("moves 'redirect' out of the pseudo-command section once it has an explicit override", async () => {
+		const { call, notify } = command();
+		await call("redirect allow");
+		notify.mockClear();
+		await call("");
+		const [message] = notify.mock.calls[0];
+		expect(message).toContain("redirect: allow");
+		expect(message).not.toContain("Also configurable");
+	});
+
 	it("sets an override with the one-liner and persists it", async () => {
 		const { call, notify } = command();
 		await call("rm deny");
