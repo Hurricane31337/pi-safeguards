@@ -7,8 +7,9 @@
  * which are anchored to the sandbox root.
  */
 
+import { appendFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { isOutside } from "../paths.ts";
+import { isBlocked, isOutside } from "../paths.ts";
 import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "../settings.ts";
 import {
 	execCat,
@@ -20,17 +21,27 @@ import {
 	execRm,
 	execSed,
 	execTail,
+	execUniq,
 	execWc,
 } from "./commands.ts";
 import { execExternal } from "./external.ts";
 import { execGit } from "./git.ts";
-import { parseArgs, splitByPipes, splitStatements } from "./parse.ts";
+import {
+	extractHeredocs,
+	extractRedirect,
+	heredocBodyFor,
+	parseArgs,
+	type RedirectSpec,
+	splitByPipes,
+	splitStatements,
+} from "./parse.ts";
 
 /** Commands available in the emulator, for the tool description and the refusal message. */
 export const SUPPORTED_COMMANDS = [
 	"grep",
 	"sed",
 	"wc",
+	"uniq",
 	"head",
 	"tail",
 	"find",
@@ -84,6 +95,8 @@ function executeSegment(
 				return execSed(args, cwd, root, stdin);
 			case "wc":
 				return execWc(args, cwd, root, stdin);
+			case "uniq":
+				return execUniq(args, cwd, root, stdin);
 			case "head":
 				return execHead(args, stdin);
 			case "tail":
@@ -130,6 +143,47 @@ function unquote(text: string): string {
 	return text;
 }
 
+/** `/dev/null` and Windows' `nul` both mean "discard", not "write a file named that". */
+function isNullTarget(target: string): boolean {
+	return target === "/dev/null" || target.toLowerCase() === "nul";
+}
+
+/**
+ * Performs a `>`/`>>` redirect once the piped command has produced its
+ * output. Gated by commandState("redirect", …) the same way any other
+ * command is - confirm-guard.ts's tool_call hook asks/denies it under that
+ * same pseudo-program name before the tool ever runs, so by the time this
+ * runs a non-deny state has already been approved (see the "ask" comment on
+ * executeSegment). The sandbox path check is unconditional regardless of
+ * that policy: redirect being "allow" opts out of being asked, never out of
+ * containment.
+ */
+function applyRedirect(
+	redirect: RedirectSpec,
+	content: string,
+	cwd: string,
+	root: string,
+	settings: SafeguardsSettings,
+): string | null {
+	if (isNullTarget(redirect.target)) return null;
+
+	if (commandState("redirect", settings, SUPPORTED_COMMANDS) === "deny") {
+		return "[bash-emulator] '>' ist deaktiviert (Einstellungen).";
+	}
+
+	const path = resolve(cwd, unquote(redirect.target));
+	if (isBlocked(path, root)) {
+		return `Access denied: "${redirect.target}" is outside the project directory.`;
+	}
+	try {
+		if (redirect.append) appendFileSync(path, content, "utf8");
+		else writeFileSync(path, content, "utf8");
+	} catch (error) {
+		return `Error writing '${redirect.target}': ${(error as Error).message}`;
+	}
+	return null;
+}
+
 /**
  * Execute a full command string. Statements are split on `;`, newlines and
  * `&&` (see splitStatements); `cd DIR` changes the working directory for every
@@ -137,6 +191,12 @@ function unquote(text: string): string {
  * carries between statements, and it never survives past this one call, since
  * each tool invocation is re-anchored to the session's cwd (see tool.ts).
  * Within a statement, `|` chains segments through stdin as before.
+ *
+ * Heredocs (`<<'EOF' … EOF`) are unwrapped once up front via
+ * extractHeredocs() so a multi-line body never gets shredded by
+ * splitStatements; a segment carrying that body's marker feeds it in as
+ * that segment's stdin, overriding anything piped in (matching real shell
+ * precedence - a heredoc IS the command's stdin).
  */
 export function executeShellCommand(
 	input: string,
@@ -148,8 +208,9 @@ export function executeShellCommand(
 ): string {
 	let workingDir = cwd;
 	const outputs: string[] = [];
+	const { rewritten, bodies } = extractHeredocs(input);
 
-	for (const statement of splitStatements(input)) {
+	for (const statement of splitStatements(rewritten)) {
 		const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
 		if (cdMatch) {
 			if (commandState("cd", settings, SUPPORTED_COMMANDS) === "deny") {
@@ -167,10 +228,21 @@ export function executeShellCommand(
 			continue;
 		}
 
+		const redirect = extractRedirect(statement);
+		const toRun = redirect ? redirect.command : statement;
+
 		let stdin: string | null = null;
-		for (const segment of splitByPipes(statement)) {
-			stdin = executeSegment(segment, workingDir, root, stdin, settings);
+		for (const segment of splitByPipes(toRun)) {
+			const heredoc = heredocBodyFor(segment, bodies);
+			stdin = executeSegment(heredoc.cleaned, workingDir, root, heredoc.body ?? stdin, settings);
 		}
+
+		if (redirect) {
+			const message = applyRedirect(redirect, stdin ?? "", workingDir, root, settings);
+			if (message) outputs.push(message);
+			continue;
+		}
+
 		if (stdin !== null) outputs.push(stdin);
 	}
 

@@ -241,6 +241,54 @@ export function execWc(args: string[], cwd: string, root: string, stdin: string 
 	return "0";
 }
 
+/** `-c` prefixes each output line with its run length, like real `uniq -c`. `-d`/`-u` filter to only duplicated/only unique runs. */
+export function execUniq(args: string[], cwd: string, root: string, stdin: string | null): string {
+	let count = false;
+	let duplicatesOnly = false;
+	let uniqueOnly = false;
+	let file: string | null = null;
+
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of arg.slice(1)) {
+				if (flag === "c") count = true;
+				else if (flag === "d") duplicatesOnly = true;
+				else if (flag === "u") uniqueOnly = true;
+			}
+		} else file = arg;
+	}
+
+	let content: string;
+	if (file) {
+		const path = resolve(cwd, file);
+		if (isBlocked(path, root)) return "Access denied: path outside project.";
+		const read = readFileSafe(path);
+		if (read === null) return `uniq: ${file}: No such file or directory`;
+		content = read;
+	} else if (stdin !== null) {
+		content = stdin;
+	} else {
+		return "(uniq: no input)";
+	}
+
+	const lines = content.split("\n");
+	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+
+	const output: string[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		let j = i;
+		while (j + 1 < lines.length && lines[j + 1] === lines[i]) j++;
+		const runLength = j - i + 1;
+		if (!(duplicatesOnly && runLength < 2) && !(uniqueOnly && runLength > 1)) {
+			output.push(count ? `${String(runLength).padStart(7)} ${lines[i]}` : lines[i]);
+		}
+		i = j + 1;
+	}
+	return output.join("\n");
+}
+
 export function execHead(args: string[], stdin: string | null): string {
 	return (stdin ?? "").split("\n").slice(0, parseLineCount(args, 10)).join("\n");
 }

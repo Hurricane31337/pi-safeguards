@@ -76,4 +76,20 @@ describe("extension wiring", () => {
 		} as ExtensionContext);
 		expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
 	});
+
+	it("runs uniq end to end through the registered tool", async () => {
+		writeFileSync(join(root, "dupes.txt"), "a\na\nb\n", "utf8");
+		const [bash] = load(root).tools;
+		const result = await bash.execute("call-3", { command: "cat dupes.txt | uniq" }, undefined, undefined, {
+			cwd: root,
+		} as ExtensionContext);
+		expect(result.content).toEqual([{ type: "text", text: "a\nb" }]);
+	});
+
+	it("feeds a heredoc to a built-in command end to end through the registered tool", async () => {
+		const [bash] = load(root).tools;
+		const command = "wc -l <<'EOF'\none\ntwo\nthree\nEOF";
+		const result = await bash.execute("call-4", { command }, undefined, undefined, { cwd: root } as ExtensionContext);
+		expect((result.content[0] as { text: string }).text.trim()).toBe("3");
+	});
 });

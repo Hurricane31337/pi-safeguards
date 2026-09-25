@@ -97,3 +97,131 @@ export function parseLineCount(args: string[], fallback: number): number {
 	}
 	return fallback;
 }
+
+/**
+ * Heredocs (`<<'EOF' ... EOF`) and output redirection (`>`/`>>`) both need to
+ * be recognised identically by execute.ts (which performs them) and
+ * confirm-guard.ts (which must ask/deny a redirect target the same way it
+ * asks/denies any other command - see extractRedirect below). Living here,
+ * next to splitStatements/splitByPipes, keeps the two from drifting apart;
+ * a heredoc body line that happens to contain "> file" text must never be
+ * mistaken for a real redirect, which is why extractHeredocs always runs
+ * first and both callers operate on its rewritten output.
+ */
+
+/** Sentinel a heredoc body is replaced with; a NUL byte never appears in a real command string. */
+const HEREDOC_MARKER_PREFIX = "\u0000HD";
+
+export interface HeredocExtraction {
+	/** The input with every `<<'DELIM' ... DELIM` span replaced by an opaque marker token. */
+	rewritten: string;
+	/** Marker token -> the heredoc body text (without the terminator line). */
+	bodies: Map<string, string>;
+}
+
+/**
+ * Replaces each heredoc in `input` with a single marker token holding no
+ * newlines, so splitStatements/splitByPipes (which split on newlines) do not
+ * shred a multi-line heredoc body into bogus separate statements. A heredoc
+ * with no matching terminator line is left as-is from that point on (real
+ * bash would hang waiting for input; the emulator has none to wait for, so
+ * it simply stops looking for more heredocs and lets the malformed tail
+ * fail downstream the way an unrecognised command normally does).
+ */
+export function extractHeredocs(input: string): HeredocExtraction {
+	const bodies = new Map<string, string>();
+	const heredocRegex = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/g;
+	let result = "";
+	let cursor = 0;
+	let counter = 0;
+	let match: RegExpExecArray | null = heredocRegex.exec(input);
+
+	while (match) {
+		const opStart = match.index;
+		const opEnd = heredocRegex.lastIndex;
+		const delimiter = match[2];
+		const lineEnd = input.indexOf("\n", opEnd);
+		if (lineEnd === -1) break; // no body possible - malformed, stop rewriting
+
+		const trailingOnLine = input.slice(opEnd, lineEnd);
+		const rest = input.slice(lineEnd + 1).split("\n");
+		const bodyLines: string[] = [];
+		let consumedChars = 0;
+		let terminated = false;
+		for (const line of rest) {
+			consumedChars += line.length + 1;
+			if (line.replace(/\r$/, "") === delimiter) {
+				terminated = true;
+				break;
+			}
+			bodyLines.push(line);
+		}
+		if (!terminated) break; // no terminator found - malformed, stop rewriting
+
+		const marker = `${HEREDOC_MARKER_PREFIX}${counter++}\u0000`;
+		bodies.set(marker, bodyLines.join("\n"));
+		result += input.slice(cursor, opStart) + marker + trailingOnLine;
+		cursor = lineEnd + 1 + consumedChars;
+		heredocRegex.lastIndex = cursor;
+		match = heredocRegex.exec(input);
+	}
+	result += input.slice(cursor);
+	return { rewritten: result, bodies };
+}
+
+/**
+ * If `segment` carries a heredoc marker, strips it and returns the body it
+ * stands for. Plain indexOf rather than a regex - a NUL byte in a regex
+ * literal reads as a mistake to a linter, even though it is exactly the
+ * point here (see HEREDOC_MARKER_PREFIX).
+ */
+export function heredocBodyFor(segment: string, bodies: Map<string, string>): { cleaned: string; body: string | null } {
+	const start = segment.indexOf(HEREDOC_MARKER_PREFIX);
+	if (start === -1) return { cleaned: segment, body: null };
+	const end = segment.indexOf("\u0000", start + HEREDOC_MARKER_PREFIX.length);
+	if (end === -1) return { cleaned: segment, body: null };
+
+	const marker = segment.slice(start, end + 1);
+	const cleaned = (segment.slice(0, start) + segment.slice(end + 1)).trim();
+	return { cleaned, body: bodies.get(marker) ?? null };
+}
+
+export interface RedirectSpec {
+	/** The statement with the redirect clause removed, ready for normal parsing. */
+	command: string;
+	target: string;
+	append: boolean;
+}
+
+/**
+ * Finds an unquoted `>`/`>>` in `statement` and splits off its target, e.g.
+ * `echo hi > out.txt` -> { command: "echo hi", target: "out.txt", append:
+ * false }. Must run on heredoc-stripped text (see extractHeredocs) or a `>`
+ * inside a heredoc body would false-positive. Only stdout redirection is
+ * recognised: a fd-numbered redirect (`2>`, immediately preceded by a
+ * digit that is itself a standalone token) is left untouched, same as
+ * before this existed - `2>/dev/null` keeps being handled by the
+ * regex-based stripping in execute.ts/confirm-guard.ts.
+ */
+export function extractRedirect(statement: string): RedirectSpec | null {
+	let inSingle = false;
+	let inDouble = false;
+	for (let i = 0; i < statement.length; i++) {
+		const char = statement[i];
+		if (char === "'" && !inDouble) inSingle = !inSingle;
+		else if (char === '"' && !inSingle) inDouble = !inDouble;
+		else if (char === ">" && !inSingle && !inDouble) {
+			const prev = statement[i - 1];
+			const isFdRedirect = prev !== undefined && /\d/.test(prev) && (i < 2 || /\s/.test(statement[i - 2]));
+			if (isFdRedirect) continue;
+
+			const append = statement[i + 1] === ">";
+			const rest = statement.slice(append ? i + 2 : i + 1).trim();
+			if (!rest) return null; // trailing ">" with nothing after it - malformed, ignore
+			const [target] = parseArgs(rest);
+			if (!target) return null;
+			return { command: statement.slice(0, i).trim(), target, append };
+		}
+	}
+	return null;
+}

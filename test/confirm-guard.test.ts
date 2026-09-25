@@ -190,6 +190,64 @@ describe("confirm guard", () => {
 		});
 	});
 
+	// A real `>`/`>>` write is gated the same way any other command is, under
+	// the pseudo-program name "redirect" - see execute.ts's applyRedirect(),
+	// which checks the exact same commandState("redirect", …).
+	describe("redirect (> / >>)", () => {
+		it("asks before a command that writes output to a file", async () => {
+			writeSettings({ commands: { redirect: "ask" } });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(true);
+			expect(await call("bash", { command: "echo hi > out.txt" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).toHaveBeenCalledOnce();
+		});
+
+		it("blocks a denied redirect immediately, without asking", async () => {
+			writeSettings({ commands: { redirect: "deny" } });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("bash", { command: "echo hi > out.txt" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("does not ask about a command with no redirect at all", async () => {
+			writeSettings({ commands: { redirect: "ask" } });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(await call("bash", { command: "echo hi" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("does not ask about discarding to /dev/null or nul - that is not a real write", async () => {
+			writeSettings({ commands: { redirect: "ask" } });
+			const call = guard();
+			const confirm = vi.fn();
+			expect(
+				await call("bash", { command: "echo hi > /dev/null" }, { hasUI: true, ui: { confirm } }),
+			).toBeUndefined();
+			expect(await call("bash", { command: "echo hi > nul" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("still asks/denies about the program itself, independent of the redirect", async () => {
+			writeSettings({ commands: { rm: "deny" } });
+			const call = guard();
+			const confirm = vi.fn();
+			const result = await call("bash", { command: "rm -rf / > out.txt" }, { hasUI: true, ui: { confirm } });
+			expect(result?.block).toBe(true);
+		});
+
+		it("a > inside a heredoc body is not mistaken for a real redirect", async () => {
+			writeSettings({ commands: { redirect: "deny" } });
+			const call = guard();
+			const confirm = vi.fn();
+			const command = "cat <<'EOF'\nsome text with > inside it\nEOF";
+			expect(await call("bash", { command }, { hasUI: true, ui: { confirm } })).toBeUndefined();
+			expect(confirm).not.toHaveBeenCalled();
+		});
+	});
+
 	// grep/find/ls exist as both native pi tools and emulated bash commands; a
 	// model asked to search or list reaches for the native tool, not bash - so
 	// deny/ask must also be checked against the native toolName directly, or a

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { globToRegex, parseArgs, parseLineCount, splitByPipes, splitStatements } from "../src/shell/parse.js";
+import {
+	extractHeredocs,
+	extractRedirect,
+	globToRegex,
+	heredocBodyFor,
+	parseArgs,
+	parseLineCount,
+	splitByPipes,
+	splitStatements,
+} from "../src/shell/parse.js";
 
 describe("splitStatements", () => {
 	it("splits on semicolons, newlines and &&", () => {
@@ -62,5 +71,85 @@ describe("parseLineCount", () => {
 		expect(parseLineCount(["head", "-n", "5"], 10)).toBe(5);
 		expect(parseLineCount(["head", "-3"], 10)).toBe(3);
 		expect(parseLineCount(["head"], 10)).toBe(10);
+	});
+});
+
+describe("extractHeredocs / heredocBodyFor", () => {
+	it("replaces a heredoc with a marker and captures its body", () => {
+		const { rewritten, bodies } = extractHeredocs("wc -l <<'EOF'\nline1\nline2\nEOF");
+		expect(rewritten).not.toContain("\n");
+		expect(rewritten.startsWith("wc -l ")).toBe(true);
+		const { cleaned, body } = heredocBodyFor(rewritten, bodies);
+		expect(cleaned).toBe("wc -l");
+		expect(body).toBe("line1\nline2");
+	});
+
+	it("supports an unquoted delimiter too", () => {
+		const { rewritten, bodies } = extractHeredocs("cat <<EOF\nhi\nEOF");
+		const { body } = heredocBodyFor(rewritten, bodies);
+		expect(body).toBe("hi");
+	});
+
+	it("does not touch a statement with no heredoc", () => {
+		const { rewritten, bodies } = extractHeredocs("echo hi");
+		expect(rewritten).toBe("echo hi");
+		expect(bodies.size).toBe(0);
+	});
+
+	it("leaves an unterminated heredoc as raw, unmodified text", () => {
+		const input = "wc -l <<'EOF'\nno terminator here";
+		const { rewritten, bodies } = extractHeredocs(input);
+		expect(rewritten).toBe(input);
+		expect(bodies.size).toBe(0);
+	});
+
+	it("preserves text on the heredoc line after the delimiter", () => {
+		const { rewritten, bodies } = extractHeredocs("wc -l <<'EOF' | grep x\nhi\nEOF");
+		const { cleaned, body } = heredocBodyFor(rewritten, bodies);
+		// Marker removal can leave a doubled space where it sat; parseArgs
+		// (which sees this next in the real pipeline) treats runs of spaces
+		// as one delimiter, so this only needs to be whitespace-equivalent.
+		expect(cleaned.replace(/\s+/g, " ")).toBe("wc -l | grep x");
+		expect(body).toBe("hi");
+	});
+
+	it("heredocBodyFor is a no-op when the segment has no marker", () => {
+		expect(heredocBodyFor("echo hi", new Map())).toEqual({ cleaned: "echo hi", body: null });
+	});
+});
+
+describe("extractRedirect", () => {
+	it("splits off a > target", () => {
+		expect(extractRedirect("echo hi > out.txt")).toEqual({ command: "echo hi", target: "out.txt", append: false });
+	});
+
+	it("splits off a >> target as append", () => {
+		expect(extractRedirect("echo hi >> out.txt")).toEqual({ command: "echo hi", target: "out.txt", append: true });
+	});
+
+	it("keeps a quoted target's quotes stripped by parseArgs downstream, not here", () => {
+		expect(extractRedirect(`echo hi > "my file.txt"`)).toEqual({
+			command: "echo hi",
+			target: "my file.txt",
+			append: false,
+		});
+	});
+
+	it("returns null when there is no unquoted >", () => {
+		expect(extractRedirect("echo hi")).toBeNull();
+		expect(extractRedirect(`echo "a > b"`)).toBeNull();
+	});
+
+	it("leaves a stderr fd redirect (2>) untouched", () => {
+		expect(extractRedirect("cmd 2>errors.txt")).toBeNull();
+		expect(extractRedirect("cmd 2>/dev/null")).toBeNull();
+	});
+
+	it("does not mistake a literal digit argument followed by > for a fd redirect", () => {
+		expect(extractRedirect("echo 2 > out.txt")).toEqual({ command: "echo 2", target: "out.txt", append: false });
+	});
+
+	it("returns null for a trailing > with nothing after it", () => {
+		expect(extractRedirect("echo hi >")).toBeNull();
 	});
 });

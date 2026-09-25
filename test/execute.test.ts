@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ beforeAll(() => {
 	mkdirSync(join(root, "src"));
 	writeFileSync(join(root, "src", "a.txt"), "alpha\nbeta\ngamma\n", "utf8");
 	writeFileSync(join(root, "src", "b.log"), "beta only\n", "utf8");
+	writeFileSync(join(root, "src", "dupes.txt"), "a\na\nb\na\n", "utf8");
 
 	outsideFile = join(mkdtempSync(join(tmpdir(), "safeguards-outside-")), "secret.txt");
 	writeFileSync(outsideFile, "do not read me\n", "utf8");
@@ -221,6 +222,95 @@ describe("command policy", () => {
 
 	it("an explicit ask override (already approved) runs an interpreter-like name too", () => {
 		expect(runWith('node -e "console.log(6+6)"', { commands: { node: "ask" } }).trim()).toBe("12");
+	});
+});
+
+describe("uniq", () => {
+	it("collapses adjacent duplicate lines, from stdin", () => {
+		expect(run("cat src/dupes.txt | uniq")).toBe("a\nb\na");
+	});
+
+	it("-c prefixes each run with its length", () => {
+		const output = run("cat src/dupes.txt | uniq -c");
+		expect(output.split("\n").map((line) => line.trim())).toEqual(["2 a", "1 b", "1 a"]);
+	});
+
+	it("-d keeps only duplicated runs, -u keeps only non-duplicated ones", () => {
+		expect(run("cat src/dupes.txt | uniq -d")).toBe("a");
+		expect(run("cat src/dupes.txt | uniq -u")).toBe("b\na");
+	});
+
+	it("reads a file directly when given one, same as when piped", () => {
+		expect(run("uniq src/dupes.txt")).toBe(run("cat src/dupes.txt | uniq"));
+	});
+});
+
+describe("heredoc", () => {
+	it("feeds a heredoc body to a command as stdin", () => {
+		expect(run("wc -l <<'EOF'\nline1\nline2\nline3\nEOF").trim()).toBe("3");
+	});
+
+	it("matches within a heredoc body via grep, same as piped stdin would", () => {
+		expect(run("grep line2 <<'EOF'\nline1\nline2\nline3\nEOF")).toBe("line2");
+	});
+
+	it("does not let the heredoc's body lines get parsed as separate statements", () => {
+		// Every one of these lines would previously dispatch as its own bogus
+		// command ("assert ist nicht installiert...") if heredocs were not
+		// unwrapped before splitStatements ran.
+		const output = run("wc -l <<'PY'\nimport re\nassert True\nprint('patched')\nPY");
+		expect(output.trim()).toBe("3");
+	});
+
+	it("runs an external interpreter with heredoc content as its stdin", () => {
+		const script = `process.stdout.write(require("fs").readFileSync(0,"utf8").trim().toUpperCase())`;
+		const output = runWith(`${node} -e '${script}' <<'EOF'\nhello\nEOF`, { defaultPolicy: "allow" });
+		expect(output).toBe("HELLO");
+	});
+
+	it("leaves an unterminated heredoc as a harmless no-op rather than throwing", () => {
+		expect(() => run("wc -l <<'EOF'\nline1\nline2")).not.toThrow();
+	});
+});
+
+describe("output redirection", () => {
+	it("writes a command's output to a file inside the root, overwriting", () => {
+		expect(runWith("echo hello > out.txt", { commands: { redirect: "allow" } })).toBe("");
+		expect(readFileSync(join(root, "out.txt"), "utf8")).toBe("hello");
+	});
+
+	it("appends with >>", () => {
+		const opts = { commands: { redirect: "allow" as const } };
+		runWith("echo one > append.txt", opts);
+		runWith("echo two >> append.txt", opts);
+		expect(readFileSync(join(root, "append.txt"), "utf8")).toBe("onetwo");
+	});
+
+	it("refuses to write outside the root", () => {
+		const output = runWith(`echo hi > ${resolve(outsideFile, "..", "new.txt")}`, { commands: { redirect: "allow" } });
+		expect(output).toContain("Access denied");
+	});
+
+	it("discards output to /dev/null and nul without writing a file", () => {
+		expect(runWith("echo secret > /dev/null", { commands: { redirect: "allow" } })).toBe("");
+		expect(runWith("echo secret > nul", { commands: { redirect: "allow" } })).toBe("");
+	});
+
+	it("discarding to /dev/null bypasses the redirect policy entirely, even when denied", () => {
+		expect(runWith("echo secret > /dev/null", { commands: { redirect: "deny" } })).toBe("");
+	});
+
+	it("an explicit deny on redirect blocks the write, without touching the file", () => {
+		const output = runWith("echo hi > denied.txt", { commands: { redirect: "deny" } });
+		expect(output).toContain("ist deaktiviert");
+		expect(() => readFileSync(join(root, "denied.txt"), "utf8")).toThrow();
+	});
+
+	it("a plain '2>' redirect is left alone (only stdout redirection is implemented)", () => {
+		// Not a real file write - this documents the limitation rather than
+		// asserting a specific error shape, which comes from whatever program
+		// receives the literal "2>somefile.txt" token.
+		expect(() => runWith("echo hi 2>somefile.txt", { commands: { redirect: "allow" } })).not.toThrow();
 	});
 });
 

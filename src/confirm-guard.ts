@@ -24,28 +24,56 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
-import { parseArgs, splitByPipes, splitStatements } from "./shell/parse.ts";
+import {
+	extractHeredocs,
+	extractRedirect,
+	heredocBodyFor,
+	parseArgs,
+	splitByPipes,
+	splitStatements,
+} from "./shell/parse.ts";
 
 /** Native pi tool names that duplicate an emulated bash command (see module doc). */
 const NATIVE_TOOLS_WITH_BASH_EQUIVALENT = new Set(["grep", "find", "ls"]);
 
-/** Every program name a command string would invoke, including `cd`. */
+/** `/dev/null` and Windows' `nul` both mean "discard", not a real write worth asking about. */
+function isNullTarget(target: string): boolean {
+	return target === "/dev/null" || target.toLowerCase() === "nul";
+}
+
+/**
+ * Every program name a command string would invoke, including `cd` and, for
+ * a real (non-null) `>`/`>>` target, the pseudo-program "redirect" - the
+ * same name execute.ts's applyRedirect() checks commandState() against, so a
+ * command that would write a file is asked/denied exactly like any other
+ * command, not silently exempted because it arrives as shell syntax rather
+ * than a program name. Must mirror execute.ts's heredoc/redirect handling
+ * exactly (extractHeredocs before splitStatements, extractRedirect per
+ * statement) - two independent implementations of "what will this command
+ * actually do" is exactly the kind of drift that quietly reopens the gap
+ * this function exists to close.
+ */
 function programsIn(command: string): string[] {
 	const programs: string[] = [];
-	for (const statement of splitStatements(command)) {
+	const { rewritten, bodies } = extractHeredocs(command);
+	for (const statement of splitStatements(rewritten)) {
 		const cdMatch = statement.match(/^cd(?:\s+.+)?$/s);
 		if (cdMatch) {
 			programs.push("cd");
 			continue;
 		}
-		for (const segment of splitByPipes(statement)) {
-			const cleaned = segment
+
+		const redirect = extractRedirect(statement);
+		if (redirect && !isNullTarget(redirect.target)) programs.push("redirect");
+		const toInspect = redirect ? redirect.command : statement;
+
+		for (const segment of splitByPipes(toInspect)) {
+			const { cleaned } = heredocBodyFor(segment, bodies);
+			const withoutStderrRedirect = cleaned
 				.replace(/\s+2>\/dev\/null/g, "")
-				.replace(/\s+>\s*\/dev\/null/g, "")
 				.replace(/\s+2>\s*nul\b/gi, "")
-				.replace(/\s+>\s*nul\b/gi, "")
 				.trim();
-			const args = parseArgs(cleaned);
+			const args = parseArgs(withoutStderrRedirect);
 			if (args.length > 0) programs.push(args[0]);
 		}
 	}

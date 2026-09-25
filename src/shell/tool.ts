@@ -72,14 +72,23 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
 			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilv], sed -n 'X,Yp', wc -l, ` +
-			"head -n, tail -n, find [-name] [-type f/d] [-maxdepth], cat, ls, cd, rm [-rf], mv, echo, pwd. " +
+			"uniq [-c] [-d] [-u], head -n, tail -n, find [-name] [-type f/d] [-maxdepth], cat, ls, cd, " +
+			"rm [-rf], mv, echo, pwd. " +
 			"Glob patterns like *.py are expanded for wc, rm and mv. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
 			"(cd changes the directory for statements after it in the same command). " +
 			"cd, rm and mv can only reach the project directory and below. " +
+			"Output redirection with > (overwrite) and >> (append) is supported and stays inside the " +
+			"project directory like every other command; writes are UTF-8 — for a file that must keep " +
+			"its original encoding, use the write/edit tools instead. Only stdout redirection is " +
+			"recognised (not 2> to a real file). " +
+			"A heredoc (<<'EOF' ... EOF) is supported as a command's stdin, e.g. for piping a script " +
+			"into python -; it must be the last thing on its line and needs a line containing only the " +
+			"exact delimiter to close it. For writing a file's contents, prefer the write/edit tools. " +
 			(policyNote ? `${policyNote} ` : "") +
-			"Some commands may require user confirmation before running, per user settings. " +
+			"Some commands may require user confirmation before running, per user settings - this " +
+			'includes redirecting output to a file, governed the same way as any other command under the name "redirect". ' +
 			"Output is truncated to the last 2000 lines or 50KB (whichever is hit first); when that " +
 			"happens the full output is written to a temp file named in the result, which you can " +
 			"inspect with read or sed -n 'X,Yp'.",

@@ -9,14 +9,33 @@ Two things, both **policy** rather than behaviour:
 | pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
 
-Supported commands: `grep [-rnilv]`, `sed -n 'X,Yp'`, `wc -l`, `head -n`, `tail -n`,
-`find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, and `|` chaining.
+Supported commands: `grep [-rnilv]`, `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`, `head -n`,
+`tail -n`, `find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, `|` chaining,
+`>`/`>>` output redirection, and a `<<'EOF' ... EOF` heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
 included — goes through `defaultPolicy` (see "Configuring the command policy" below): the shipped
 default is `ask`, so the model is not silently refused and not silently allowed to spawn a process,
 it is asked about by name every time. Set `defaultPolicy` to `deny` (or override a specific one of
 them) for the old refuse-outright behaviour.
+
+### Redirection and heredocs
+
+`>`/`>>` writes stay inside the sandbox root exactly like every other command (`isBlocked` on the
+resolved target), and are gated by `commandState()` under the pseudo-program name `"redirect"` -
+`confirm-guard.ts` asks/denies a redirect the same way it does `rm` or any other command, so
+`/safeguards redirect ask` (or `deny`) controls it. `/dev/null` and Windows' `nul` are recognised as
+"discard the output" and never need asking, matching how a real shell treats them. Only stdout
+redirection is implemented - a stderr redirect (`2>somefile`) is left as a literal token, same as
+before this existed; `2>/dev/null` keeps being stripped as a no-op.
+
+A heredoc (`<<'EOF' ... EOF`) supplies a command's stdin, e.g. `python - <<'PY' ... PY`. It must be
+the last thing on that line and needs a line containing only the exact delimiter to close it -
+`extractHeredocs()` (`src/shell/parse.ts`) unwraps it into an opaque marker *before* statement
+splitting even sees the command, so a multi-line body is never shredded into bogus separate
+statements (each line used to get dispatched - and refused - as its own "command"). Writes made this
+way are plain UTF-8; for a file that must keep its original encoding, use the `write`/`edit` tools
+instead, same as for `>`.
 
 ## Why this is not in pi-improved
 
@@ -71,6 +90,9 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 the raw built-in default (which would otherwise be `allow` for all of them, since every command here
 is one of the emulator's built-ins — see `commandState()`).
 
+`"redirect"` (a `>`/`>>` write) is not a built-in and has no entry in this table, so it defaults to
+`defaultPolicy` ("ask") until you set `/safeguards redirect <state>` explicitly.
+
 ## Design note: the one deliberate reimplementation
 
 The house rule (`pi-improved/README.md`) is *never reimplement a pi behaviour we only want to
@@ -94,8 +116,9 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
   itself. Adding a command that shells out, evaluates a script or follows a config file removes that
   property.
 - **Emulated, not equivalent.** `sed` supports only the `'X,Yp'` line-range form, `grep` a subset of
-  flags, and there is no redirection, globbing or subshell. Commands go through pi's built-in
-  `grep` / `find` / `ls` tools where possible; the emulator is the fallback.
+  flags, `>`/`>>` write plain UTF-8 with no forced trailing newline (the content is written exactly
+  as the pipeline produced it), and there is no globbing beyond `*`/`?` or subshell. Commands go
+  through pi's built-in `grep` / `find` / `ls` tools where possible; the emulator is the fallback.
 - **`git` needs git on PATH.** Without it, `git` returns a plain German notice rather than failing
   the tool call.
 - **Relative imports must use `.ts`** — extensions load from source through jiti.
