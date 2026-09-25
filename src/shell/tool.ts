@@ -71,9 +71,12 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		label: "bash",
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
-			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvc], sed -n 'X,Yp', wc -l, ` +
-			"uniq [-c] [-d] [-u], sort [-r] [-u] [-n], head -n, tail -n (both accept a file argument or " +
-			"stdin), find [-name] [-type f/d] [-maxdepth], cat, ls, cd, rm [-rf], mv, echo, pwd. " +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvc] (-c with an empty ` +
+			"pattern counts every line, like real grep -c \"\"), sed -n 'X,Yp', wc -l, uniq [-c] [-d] [-u], " +
+			"sort [-r] [-u] [-n], printf 'fmt' [args...] (\\n/\\t escapes and %s/%d/%f/%o/%x/%X substitution, " +
+			"repeating the format over extra args like real printf), head -n, tail -n (both accept a file " +
+			"argument or stdin), find [-name] [-type f/d] [-maxdepth] (paths are root-relative, like ./src/x), " +
+			"cat, ls [-d], cd, rm [-rf], mv, echo, pwd. " +
 			"Glob patterns like *.py are expanded for wc, rm and mv. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +

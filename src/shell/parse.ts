@@ -60,23 +60,39 @@ export function splitByPipes(command: string): string[] {
 	return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-/** Tokenise one command segment into argv, respecting quotes. */
+/**
+ * Tokenise one command segment into argv, respecting quotes. Tracks whether
+ * the current token has been *started* (hasToken) rather than checking
+ * `current` for truthiness - `''` is a valid, meaningful empty-string
+ * argument in a real shell (e.g. `grep '' file` matches every line), and
+ * checking `if (current)` would silently drop it since `""` is falsy,
+ * quietly reshuffling every argument after it by one position instead.
+ */
 export function parseArgs(segment: string): string[] {
 	const args: string[] = [];
 	let current = "";
+	let hasToken = false;
 	let inSingle = false;
 	let inDouble = false;
 	for (const char of segment) {
-		if (char === "'" && !inDouble) inSingle = !inSingle;
-		else if (char === '"' && !inSingle) inDouble = !inDouble;
-		else if (char === " " && !inSingle && !inDouble) {
-			if (current) {
+		if (char === "'" && !inDouble) {
+			inSingle = !inSingle;
+			hasToken = true;
+		} else if (char === '"' && !inSingle) {
+			inDouble = !inDouble;
+			hasToken = true;
+		} else if (char === " " && !inSingle && !inDouble) {
+			if (hasToken) {
 				args.push(current);
 				current = "";
+				hasToken = false;
 			}
-		} else current += char;
+		} else {
+			current += char;
+			hasToken = true;
+		}
 	}
-	if (current) args.push(current);
+	if (hasToken) args.push(current);
 	return args;
 }
 

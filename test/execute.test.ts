@@ -80,8 +80,13 @@ describe("path containment", () => {
 
 	// readdirSync on a file throws ENOTDIR; that used to be caught and
 	// reported as "No such file or directory" for a file that plainly exists.
-	it("ls on a file argument echoes its name, not 'No such file or directory'", () => {
-		expect(run("ls src/a.txt")).toBe("a.txt");
+	// Real `ls` echoes the argument as given, not just its basename.
+	it("ls on a file argument echoes the path as given, not 'No such file or directory'", () => {
+		expect(run("ls src/a.txt")).toBe("src/a.txt");
+	});
+
+	it("ls -d on a directory names it instead of listing its contents", () => {
+		expect(run("ls -d src")).toBe("src");
 	});
 });
 
@@ -127,8 +132,8 @@ describe("search", () => {
 		expect(output).toContain("./src/b.log:1:beta only");
 	});
 
-	it("finds by name and type", () => {
-		expect(run("find src -name *.log")).toContain("b.log");
+	it("finds by name and type, with root-relative paths like grep uses", () => {
+		expect(run("find src -name *.log")).toBe("./src/b.log");
 		expect(run("find src -name *.log")).not.toContain("a.txt");
 	});
 
@@ -144,6 +149,17 @@ describe("search", () => {
 		const output = run("grep -rc beta src");
 		expect(output).toContain("./src/a.txt:1");
 		expect(output).toContain("./src/b.log:1");
+	});
+
+	// "" is falsy in JS, so `if (!pattern)` used to treat an explicitly empty
+	// pattern the same as no pattern given at all - but an empty regex
+	// matches every line, so -c "" should count all of them, not print nothing.
+	it("-c with an empty pattern counts every line, not nothing", () => {
+		expect(run("grep -c '' src/a.txt")).toBe("3");
+	});
+
+	it("an empty pattern with no -c matches (and prints) every line", () => {
+		expect(run("grep '' src/a.txt")).toBe("alpha\nbeta\ngamma");
 	});
 });
 
@@ -207,6 +223,39 @@ describe("sort", () => {
 				.split("\n")
 				.map((l) => l.trim()),
 		).toEqual(["3 a", "1 b"]);
+	});
+});
+
+describe("printf", () => {
+	// The reported bug: printf was a plain arg-join, so it neither interpreted
+	// \n/\t nor substituted %s/%d - the format string and its would-be
+	// arguments just got concatenated verbatim.
+	it("interprets \\n and \\t escapes in the format string", () => {
+		expect(run(String.raw`printf 'a\tb\nc'`)).toBe("a\tb\nc");
+	});
+
+	it("substitutes %s with an argument", () => {
+		expect(run(`printf '%s %s' hello world`)).toBe("hello world");
+	});
+
+	it("substitutes %d/%i/%o/%x/%X numerically", () => {
+		expect(run(`printf '%d %o %x %X' 10 8 255 255`)).toBe("10 10 ff FF");
+	});
+
+	it("%% prints a literal percent sign", () => {
+		expect(run(`printf '100%%'`)).toBe("100%");
+	});
+
+	it("repeats the format over extra arguments, like real printf", () => {
+		expect(run(String.raw`printf '%s\n' a b c`)).toBe("a\nb\nc\n");
+	});
+
+	it("a format with no specifiers runs once even with extra arguments", () => {
+		expect(run(`printf hi a b c`)).toBe("hi");
+	});
+
+	it("a missing %s argument becomes an empty string, not literal %s", () => {
+		expect(run(`printf '[%s]'`)).toBe("[]");
 	});
 });
 

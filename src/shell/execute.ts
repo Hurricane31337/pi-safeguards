@@ -18,6 +18,7 @@ import {
 	execHead,
 	execLs,
 	execMv,
+	execPrintf,
 	execRm,
 	execSed,
 	execSort,
@@ -44,6 +45,7 @@ export const SUPPORTED_COMMANDS = [
 	"wc",
 	"uniq",
 	"sort",
+	"printf",
 	"head",
 	"tail",
 	"find",
@@ -123,7 +125,7 @@ function executeSegment(
 			case "false":
 				return "";
 			case "printf":
-				return args.slice(1).join(" ");
+				return execPrintf(args);
 			case "git":
 				return execGit(args, cwd, stdin);
 			default:

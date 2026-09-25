@@ -76,6 +76,7 @@ export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
 		head: "allow",
 		ls: "allow",
 		mv: "ask",
+		printf: "allow",
 		pwd: "allow",
 		rm: "ask",
 		sed: "allow",

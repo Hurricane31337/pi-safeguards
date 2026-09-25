@@ -50,6 +50,18 @@ describe("parseArgs", () => {
 	it("keeps quoted arguments together and strips the quotes", () => {
 		expect(parseArgs(`sed -n '1,20p' "my file.txt"`)).toEqual(["sed", "-n", "1,20p", "my file.txt"]);
 	});
+
+	// `if (current)` used to drop an empty quoted argument entirely, since ""
+	// is falsy - `grep '' file` silently lost its pattern arg and matched
+	// "file" as the pattern instead, with no target left to search.
+	it("keeps an empty quoted argument as an empty string, not dropping it", () => {
+		expect(parseArgs(`grep '' file.txt`)).toEqual(["grep", "", "file.txt"]);
+		expect(parseArgs(`grep "" file.txt`)).toEqual(["grep", "", "file.txt"]);
+	});
+
+	it("keeps an empty quoted argument even when it is the last token", () => {
+		expect(parseArgs(`echo ''`)).toEqual(["echo", ""]);
+	});
 });
 
 describe("globToRegex", () => {

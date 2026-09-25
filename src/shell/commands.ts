@@ -112,6 +112,10 @@ function grepInPath(
 	const content = readFileSafe(path);
 	if (!content) return;
 	const lines = content.split("\n");
+	// A trailing newline terminates the last line, it does not start an empty
+	// one - without this, a pattern that matches an empty string (an empty
+	// pattern, or e.g. ".*") would report one bogus extra match per file.
+	if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
 	const rel = `./${relative(root, path).replace(/\\/g, "/")}`;
 
 	if (flags.countOnly) {
@@ -160,7 +164,10 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		else targets.push(resolve(cwd, arg));
 	}
 
-	if (!pattern) return "(grep: no pattern)";
+	// `!pattern` would also reject an explicitly empty pattern ("" is falsy),
+	// but grep -c "" file is a real, meaningful invocation - an empty regex
+	// matches every line, so it should count all of them, not print nothing.
+	if (pattern === null) return "(grep: no pattern)";
 
 	let regex: RegExp;
 	try {
@@ -172,6 +179,7 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 	const results: string[] = [];
 	if (targets.length === 0 && stdin !== null) {
 		const lines = stdin.split("\n");
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
 		if (flags.countOnly) {
 			let count = 0;
 			for (const line of lines) {
@@ -402,6 +410,78 @@ export function execSort(args: string[], cwd: string, root: string, stdin: strin
 	return lines.join("\n");
 }
 
+const PRINTF_ESCAPES: Record<string, string> = { n: "\n", t: "\t", r: "\r", "\\": "\\", '"': '"', "'": "'", "0": "\0" };
+
+/** One pass over the format string, consuming args for each %-specifier it hits. */
+function applyPrintfFormat(
+	format: string,
+	args: readonly string[],
+	startIndex: number,
+): { output: string; nextIndex: number } {
+	let output = "";
+	let argIndex = startIndex;
+	let i = 0;
+	while (i < format.length) {
+		const char = format[i];
+		if (char === "\\" && i + 1 < format.length && format[i + 1] in PRINTF_ESCAPES) {
+			output += PRINTF_ESCAPES[format[i + 1]];
+			i += 2;
+			continue;
+		}
+		if (char === "%" && i + 1 < format.length) {
+			const spec = format[i + 1];
+			if (spec === "%") {
+				output += "%";
+				i += 2;
+				continue;
+			}
+			if ("sdioxXf".includes(spec)) {
+				const arg = args[argIndex] ?? "";
+				argIndex++;
+				if (spec === "s") output += arg;
+				else if (spec === "f") output += String(Number.parseFloat(arg) || 0);
+				else {
+					const n = Number.parseInt(arg, 10) || 0;
+					if (spec === "o") output += n.toString(8);
+					else if (spec === "x") output += n.toString(16);
+					else if (spec === "X") output += n.toString(16).toUpperCase();
+					else output += String(n); // d, i
+				}
+				i += 2;
+				continue;
+			}
+		}
+		output += char;
+		i++;
+	}
+	return { output, nextIndex: argIndex };
+}
+
+/**
+ * Real printf semantics, not a plain arg-join: the format string interprets
+ * \n/\t/\\/\"/\'/\0, and %s/%d/%i/%o/%x/%X/%f/%% substitute from the
+ * remaining arguments. If there are more arguments than the format
+ * consumes, the whole format is reapplied against the leftover arguments
+ * (what real printf does with e.g. `printf '%s\n' a b c`); a format with no
+ * specifiers at all still runs once even with extra arguments, rather than
+ * looping forever with nothing left to consume.
+ */
+export function execPrintf(args: string[]): string {
+	const format = args[1] ?? "";
+	const values = args.slice(2);
+
+	let result = "";
+	let index = 0;
+	do {
+		const { output, nextIndex } = applyPrintfFormat(format, values, index);
+		result += output;
+		if (nextIndex === index) break; // format consumes no args - one pass is all there is
+		index = nextIndex;
+	} while (index < values.length);
+
+	return result;
+}
+
 function findWalk(
 	dir: string,
 	nameRegex: RegExp | null,
@@ -425,7 +505,7 @@ function findWalk(
 		const isDir = entry.isDirectory();
 		const typeOk = !typeFilter || (typeFilter === "f" && entry.isFile()) || (typeFilter === "d" && isDir);
 		const nameOk = !nameRegex || nameRegex.test(entry.name);
-		if (typeOk && nameOk) results.push(full.replace(/\\/g, "/"));
+		if (typeOk && nameOk) results.push(`./${relative(root, full).replace(/\\/g, "/")}`);
 		if (isDir) findWalk(full, nameRegex, typeFilter, maxDepth, depth + 1, root, results);
 	}
 }
@@ -464,6 +544,7 @@ export function execCat(args: string[], cwd: string, root: string): string {
 }
 
 export function execLs(args: string[], cwd: string, root: string): string {
+	const dirOnly = args.slice(1).some((arg) => arg.startsWith("-") && arg !== "-" && arg.includes("d"));
 	const target = args.find((arg, i) => i > 0 && !arg.startsWith("-"));
 	const path = resolve(cwd, target ?? ".");
 	if (isBlocked(path, root)) return "Access denied: path outside project.";
@@ -471,8 +552,9 @@ export function execLs(args: string[], cwd: string, root: string): string {
 		const stat = statSync(path);
 		// readdirSync on a file throws ENOTDIR - that reads as "does not exist"
 		// to a model, even though the file is right there; real `ls` on a file
-		// argument just echoes its name back.
-		if (!stat.isDirectory()) return basename(path);
+		// argument just echoes its name back. -d asks for the same treatment on
+		// a directory too: name it, don't list what's inside it.
+		if (dirOnly || !stat.isDirectory()) return target ?? ".";
 		return readdirSync(path, { withFileTypes: true })
 			.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
 			.join("\n");

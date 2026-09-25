@@ -9,10 +9,13 @@ Two things, both **policy** rather than behaviour:
 | pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
 
-Supported commands: `grep [-rnilvc]`, `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`,
-`sort [-r] [-u] [-n]`, `head -n`, `tail -n` (both accept a file argument or stdin),
-`find [-name] [-type f/d] [-maxdepth]`, `cat`, `ls`, `echo`, `pwd`, `git`, `|` chaining,
-`>`/`>>` output redirection, and a `<<'EOF' ... EOF` heredoc as a command's stdin.
+Supported commands: `grep [-rnilvc]` (`-c` with an empty pattern counts every line, like real
+`grep -c ""`), `sed -n 'X,Yp'`, `wc -l`, `uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`,
+`printf 'fmt' [args...]` (`\n`/`\t` escapes and `%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating
+the format over extra args like real `printf`), `head -n`, `tail -n` (both accept a file argument or
+stdin), `find [-name] [-type f/d] [-maxdepth]` (root-relative paths, like `./src/x.ts`), `cat`,
+`ls [-d]`, `echo`, `pwd`, `git`, `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
+heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
 included — goes through `defaultPolicy` (see "Configuring the command policy" below): the shipped
@@ -94,7 +97,7 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 
 | Command | State |
 |---|---|
-| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `printf`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
 | `git`, `mv`, `rm` | `ask` |
 
 `/safeguards <command> clear` on one of these resets it back to this table's value rather than to
@@ -138,6 +141,16 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
   mangled UTF-8 through the OEM codepage and rejected GNU-style flags like `-u` — looking exactly
   like a broken emulator rather than a missing one. Before assuming a command is "emulated but
   buggy," check `SUPPORTED_COMMANDS` first; it may just not exist yet.
+- **`parseArgs` used to drop an empty quoted argument (`''`) entirely**, because it only pushed a
+  token when `current` was truthy and `""` is falsy - `grep '' file` silently lost its pattern
+  argument and matched `file` as the pattern instead, with nothing left to search. Fixed by tracking
+  whether a token was *started* (a `hasToken` flag) rather than checking the accumulated text for
+  truthiness. Worth remembering when touching any of the tokenisers in `parse.ts`: an empty string is
+  a legitimate value here, not an absent one.
+- **A trailing newline is not an extra empty line.** Every command that splits file/stdin content on
+  `\n` (`uniq`, `sort`, `head`, `tail`, `grep`) pops a resulting empty final element before using the
+  lines - otherwise a pattern that can match an empty string (an empty pattern, or e.g. `.*`) reports
+  one bogus extra match per file, and dedup/sort logic gets a phantom blank line to work with.
 - **Relative imports must use `.ts`** — extensions load from source through jiti.
 
 ## Tests
