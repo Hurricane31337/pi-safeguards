@@ -143,6 +143,17 @@ export interface HeredocExtraction {
  * bash would hang waiting for input; the emulator has none to wait for, so
  * it simply stops looking for more heredocs and lets the malformed tail
  * fail downstream the way an unrecognised command normally does).
+ *
+ * The terminator is matched after trimming its own leading/trailing
+ * whitespace, not by an exact line match - real bash requires the plain
+ * `<<DELIM` terminator at column 0 (only `<<-DELIM` strips leading *tabs*,
+ * and only tabs), but models routinely indent an entire heredoc block,
+ * closing delimiter included, for readability. Requiring column 0 here
+ * just meant that extremely common, reasonable style silently broke every
+ * body line into its own bogus "command". Once a terminator is found this
+ * way, its own leading-whitespace prefix is stripped from every body line
+ * that starts with it - the same idea as `<<-`, generalised from tabs to
+ * whatever whitespace the model actually indented with.
  */
 export function extractHeredocs(input: string): HeredocExtraction {
 	const bodies = new Map<string, string>();
@@ -166,11 +177,18 @@ export function extractHeredocs(input: string): HeredocExtraction {
 		let terminated = false;
 		for (const line of rest) {
 			consumedChars += line.length + 1;
-			if (line.replace(/\r$/, "") === delimiter) {
+			const withoutCR = line.replace(/\r$/, "");
+			if (withoutCR.trim() === delimiter) {
 				terminated = true;
+				const indent = withoutCR.slice(0, withoutCR.length - withoutCR.trimStart().length);
+				if (indent.length > 0) {
+					for (let i = 0; i < bodyLines.length; i++) {
+						if (bodyLines[i].startsWith(indent)) bodyLines[i] = bodyLines[i].slice(indent.length);
+					}
+				}
 				break;
 			}
-			bodyLines.push(line);
+			bodyLines.push(withoutCR);
 		}
 		if (!terminated) break; // no terminator found - malformed, stop rewriting
 

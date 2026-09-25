@@ -471,6 +471,17 @@ describe("heredoc", () => {
 	it("leaves an unterminated heredoc as a harmless no-op rather than throwing", () => {
 		expect(() => run("wc -l <<'EOF'\nline1\nline2")).not.toThrow();
 	});
+
+	// Reproduces the reported real-world shape: an entire heredoc block,
+	// closing delimiter included, indented for readability - the common
+	// style a model reaches for when embedding a script. This used to leave
+	// the terminator unrecognised (only column 0 matched), so every body
+	// line dispatched as its own bogus "command" instead of reaching python.
+	it("feeds an indented heredoc block to an interpreter, dedented, with relative indentation preserved", () => {
+		const script = `process.stdout.write(require("fs").readFileSync(0,"utf8"))`;
+		const command = `${node} -e '${script}' <<'PY'\n    if True:\n        print(1)\n    PY`;
+		expect(runWith(command, { defaultPolicy: "allow" })).toBe("if True:\n    print(1)");
+	});
 });
 
 describe("output redirection", () => {

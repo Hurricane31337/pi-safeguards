@@ -42,10 +42,16 @@ redirection is implemented - a stderr redirect (`2>somefile`) is left as a liter
 before this existed; `2>/dev/null` keeps being stripped as a no-op.
 
 A heredoc (`<<'EOF' ... EOF`) supplies a command's stdin, e.g. `python - <<'PY' ... PY`. It must be
-the last thing on that line and needs a line containing only the exact delimiter to close it -
-`extractHeredocs()` (`src/shell/parse.ts`) unwraps it into an opaque marker *before* statement
-splitting even sees the command, so a multi-line body is never shredded into bogus separate
-statements (each line used to get dispatched - and refused - as its own "command"). Writes made this
+the last thing on that line and needs a line containing only the delimiter (whitespace trimmed) to
+close it - unlike real bash, an *indented* closing delimiter is fine (only `<<-` gets that leniency
+in a real shell, and only for tabs); models routinely indent an entire heredoc block for readability,
+and requiring column 0 just meant that common, reasonable style broke instead of working. When the
+delimiter is indented, its own leading whitespace is stripped from every body line that starts with
+it, same idea as `<<-` generalised from tabs to whatever the model actually indented with; a body
+line indented less than the delimiter is left alone rather than over-stripped. `extractHeredocs()`
+(`src/shell/parse.ts`) unwraps the whole thing into an opaque marker *before* statement splitting
+even sees the command, so a multi-line body is never shredded into bogus separate statements (each
+line used to get dispatched - and refused - as its own "command"). Writes made this
 way are plain UTF-8; for a file that must keep its original encoding, use the `write`/`edit` tools
 instead, same as for `>`.
 

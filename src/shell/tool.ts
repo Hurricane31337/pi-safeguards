@@ -95,7 +95,9 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"recognised (not 2> to a real file). " +
 			"A heredoc (<<'EOF' ... EOF) is supported as a command's stdin, e.g. for piping a script " +
 			"into python -; it must be the last thing on its line and needs a line containing only the " +
-			"exact delimiter to close it. For writing a file's contents, prefer the write/edit tools. " +
+			"delimiter (whitespace trimmed) to close it - the whole block, including the closing " +
+			"delimiter, may be indented for readability, and that indent is stripped from the body. " +
+			"For writing a file's contents, prefer the write/edit tools. " +
 			(policyNote ? `${policyNote} ` : "") +
 			"Some commands may require user confirmation before running, per user settings - this " +
 			'includes redirecting output to a file, governed the same way as any other command under the name "redirect". ' +

@@ -125,6 +125,37 @@ describe("extractHeredocs / heredocBodyFor", () => {
 		expect(body).toBe("hi");
 	});
 
+	// Real bash requires the plain `<<DELIM` terminator at column 0 - only
+	// `<<-DELIM` strips leading *tabs*, and only tabs. Models routinely
+	// indent an entire heredoc block (closing delimiter included) for
+	// readability, which used to leave the terminator unrecognised entirely
+	// and shred every body line into its own bogus "command".
+	it("recognises an indented closing delimiter, not just column 0", () => {
+		const { rewritten, bodies } = extractHeredocs("python - <<'PY'\n    import re\n    print(1)\n    PY");
+		const { body } = heredocBodyFor(rewritten, bodies);
+		expect(body).toBe("import re\nprint(1)");
+	});
+
+	it("dedents only by the terminator's own indent, leaving deeper indentation intact", () => {
+		const input = "python - <<'PY'\n    if x:\n        print(1)\n    PY";
+		const { rewritten, bodies } = extractHeredocs(input);
+		const { body } = heredocBodyFor(rewritten, bodies);
+		expect(body).toBe("if x:\n    print(1)");
+	});
+
+	it("a body line indented less than the terminator is left as-is, not over-stripped", () => {
+		const input = "cat <<'EOF'\nnot indented\n    EOF";
+		const { rewritten, bodies } = extractHeredocs(input);
+		const { body } = heredocBodyFor(rewritten, bodies);
+		expect(body).toBe("not indented");
+	});
+
+	it("a column-0 delimiter still needs no dedenting (existing behaviour unchanged)", () => {
+		const { rewritten, bodies } = extractHeredocs("cat <<'EOF'\n  keeps its indent\nEOF");
+		const { body } = heredocBodyFor(rewritten, bodies);
+		expect(body).toBe("  keeps its indent");
+	});
+
 	it("heredocBodyFor is a no-op when the segment has no marker", () => {
 		expect(heredocBodyFor("echo hi", new Map())).toEqual({ cleaned: "echo hi", body: null });
 	});
