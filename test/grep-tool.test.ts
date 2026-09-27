@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { comparePaths, needsLegacyPass, setRipgrepPathForTests } from "../src/grep/search.js";
+import { comparePaths, needsLegacyPass, ripgrepThreads, setRipgrepPathForTests } from "../src/grep/search.js";
 import { createSafeguardGrepTool, pathSyntaxError, type SafeguardGrepInput } from "../src/grep/tool.js";
 import { execGrep } from "../src/shell/commands.js";
 
@@ -71,6 +71,17 @@ describe("needsLegacyPass", () => {
 		expect(needsLegacyPass("fkt\\.MsgB", false)).toBe(false);
 		expect(needsLegacyPass("MsgB|msgi", false)).toBe(false);
 		expect(needsLegacyPass("a.b", true)).toBe(false);
+	});
+});
+
+describe("ripgrepThreads", () => {
+	it("uses about one thread per physical core on big machines, capped at 32, never below rg's own default", () => {
+		expect(ripgrepThreads(1)).toBe(1);
+		expect(ripgrepThreads(8)).toBe(8);
+		expect(ripgrepThreads(16)).toBe(12);
+		expect(ripgrepThreads(32)).toBe(16);
+		expect(ripgrepThreads(64)).toBe(32);
+		expect(ripgrepThreads(128)).toBe(32);
 	});
 });
 

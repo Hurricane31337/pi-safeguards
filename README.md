@@ -38,6 +38,10 @@ lines) takes about 11 s, and most of that is rg's own JSON output. As in rg, a b
 walking is skipped; a named one (or one whose NUL comes after a match) is reported, never printed.
 Look-around and backreferences are retried with `--pcre2`.
 
+**Threads.** rg defaults to min(logical cores, 12). On a 64-core dev machine that measured
+209 ms per pass; 24 threads 174 ms, 32 171 ms, 64 184 ms (SMT siblings only contend). So
+`ripgrepThreads()` passes half the logical cores, capped at 32, and never fewer than rg's own default.
+
 `grep -r` in the emulator runs on the same engine (`src/shell/ripgrep.ts`). It used to read
 `lines.text`, which rg leaves out for a non-UTF-8 line (it sends `lines.bytes`). Any CP1252 umlaut
 in a matched line crashed it with `Cannot read properties of undefined (reading 'replace')`.

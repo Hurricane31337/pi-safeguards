@@ -29,6 +29,7 @@
 import { isUtf8 } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { createInterface } from "node:readline";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -180,8 +181,20 @@ function planPasses(spec: SearchSpec): Pass[] {
 // ---------------------------------------------------------------------------
 // Arguments
 
+/**
+ * rg's own default is min(logical cores, 12). Measured on a 64-core dev
+ * machine over a 14k-file repo (warm cache): 12 threads 209 ms, 24 174 ms,
+ * 32 171 ms, 64 184 ms - past about one thread per physical core, SMT
+ * siblings only contend. So: half the logical cores (roughly the physical
+ * ones), capped at 32, and never fewer than rg would pick itself.
+ */
+export function ripgrepThreads(logicalCores: number): number {
+	const rgDefault = Math.min(logicalCores, 12);
+	return Math.max(1, rgDefault, Math.min(Math.floor(logicalCores / 2), 32));
+}
+
 function buildArgs(spec: SearchSpec, pass: Pass, pcre2: boolean): string[] {
-	const args = ["--json", "--no-config", "--color=never"];
+	const args = ["--json", "--no-config", "--color=never", "--threads", String(ripgrepThreads(availableParallelism()))];
 	if (spec.hidden) args.push("--hidden");
 	if (!spec.respectIgnore) args.push("--no-ignore");
 	// Deliberately neither --sort=path (single-threaded: 6x slower on a real
