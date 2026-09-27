@@ -71,7 +71,9 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 		label: "bash",
 		description:
 			"Execute shell commands using a built-in emulator (no bash required on Windows). " +
-			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — grep [-rnilvcwoqhHE] [-e PATTERN]... ` +
+			`Supported commands: ${SUPPORTED_COMMANDS.join(", ")} — ` +
+			"prefer the grep tool over grep here: it has count/filesWithMatches modes, context lines, totals and " +
+			"per-file encoding detection. grep [-rnilvcwoqhHE] [-e PATTERN]... [-m N] " +
 			"[--include=GLOB] [--exclude-dir=GLOB] (-c with an empty pattern counts every line, like real grep " +
 			'-c ""; real BRE dialect by default - ( ) { } | + ? are literal unless backslash-escaped, in which ' +
 			"case they take the special ERE meaning (\\( \\) \\{ \\} \\| \\+ \\?); -E switches to ERE, where the " +
@@ -79,9 +81,11 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"line per match; -q suppresses all output; -h/-H force the filename prefix off/on regardless of " +
 			"target count; repeating -e ORs the patterns together; -l wins over -c when both are given; -r " +
 			"descends into dot-directories too (only .git and node_modules are skipped, not every hidden " +
-			"entry); -A/-B/-C/-m are not implemented and are silently ignored (their numeric operand, if any, " +
-			"is still consumed so it can't be misread as the pattern) rather than erroring - stick to the " +
-			'flags listed here; a missing file reports "No such file or directory" and a directory operand ' +
+			"entry, and .gitignore is not consulted, like real grep); -m N stops after N matching lines per file; " +
+			"-A/-B/-C are not implemented and fail with an error naming the grep tool's context parameters; " +
+			"files are decoded per file as UTF-8 or Windows-1252, and a binary file reports " +
+			'"binary file matches" instead of its content; a glob operand like src/*.vb is expanded; ' +
+			'a missing file reports "No such file or directory" and a directory operand ' +
 			'without -r reports "Is a directory", both the same way cat/wc already report a missing file), ' +
 			"sed -n 'X,Yp', wc -l, uniq [-c] [-d] [-u], sort [-r] [-u] [-n], printf 'fmt' [args...] " +
 			"(\\n/\\t escapes and %s/%d/%f/%o/%x/%X substitution, repeating the format over extra args like " +

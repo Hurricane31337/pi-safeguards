@@ -300,10 +300,23 @@ describe("search", () => {
 		expect(run("grep --max-count=2 a src/dupes.txt")).toBe("a\na");
 		expect(run("grep -m2 a src/dupes.txt")).toBe("a\na");
 		expect(run("grep -m 2 -c a src/dupes.txt")).toBe("2");
-		expect(run("grep -A 1 beta src/a.txt")).toBe("grep: unsupported option: -A");
-		expect(run("grep -B 1 beta src/a.txt")).toBe("grep: unsupported option: -B");
-		expect(run("grep -C 1 beta src/a.txt")).toBe("grep: unsupported option: -C");
-		expect(run("grep -A2 beta src/a.txt")).toBe("grep: unsupported option: -A");
+		expect(run("grep -A 1 beta src/a.txt")).toMatch(
+			/^grep: unsupported option: -A \(for context lines use the grep tool/,
+		);
+		expect(run("grep -B 1 beta src/a.txt")).toMatch(
+			/^grep: unsupported option: -B \(for context lines use the grep tool/,
+		);
+		expect(run("grep -C 1 beta src/a.txt")).toMatch(
+			/^grep: unsupported option: -C \(for context lines use the grep tool/,
+		);
+		expect(run("grep -A2 beta src/a.txt")).toMatch(
+			/^grep: unsupported option: -A \(for context lines use the grep tool/,
+		);
+	});
+
+	it("expands a glob operand the way a shell would", () => {
+		expect(run("grep -n beta src/*.txt")).toBe("./src/a.txt:2:beta");
+		expect(run("grep -l beta src/*.log src/*.txt")).toBe("./src/b.log\n./src/a.txt");
 	});
 
 	// -l wins over -c when both are given, like real grep - this used to

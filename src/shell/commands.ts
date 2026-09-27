@@ -440,10 +440,16 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		} else if (!positionalPatternTaken) {
 			patterns.push(arg);
 			positionalPatternTaken = true;
-		} else targets.push(resolve(cwd, arg));
+		} else {
+			// A shell expands `dir/*.vb` before grep ever sees it; nothing did
+			// here, so the literal name was reported as "No such file".
+			for (const expanded of expandGlob(arg, cwd)) targets.push(resolve(cwd, expanded));
+		}
 	}
 
-	if (unsupportedOption) return `grep: unsupported option: ${unsupportedOption}`;
+	if (unsupportedOption) {
+		return `grep: unsupported option: ${unsupportedOption} (for context lines use the grep tool's before/after/context parameters)`;
+	}
 
 	// No patterns at all (never a bare "-e", never a positional one) means no
 	// pattern was given; an explicitly empty pattern ("" from -e or as the

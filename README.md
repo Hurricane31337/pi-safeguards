@@ -2,22 +2,55 @@
 
 The containment layer that the IDE extensions impose on a pi session, as one pi extension.
 
-Two things, both **policy** rather than behaviour:
+Three things, all **policy** rather than behaviour:
 
 | Change | Why | How |
 |---|---|---|
-| pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` — the tools themselves are pi's and stay untouched |
+| pi's built-in file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) refuse paths outside the session's working directory | The IDE hands the agent one solution directory. Nothing above it is part of the task, and a model that wanders out of it is a support case at best. | `tool_call` hook returning `{ block: true, reason }` |
 | `bash` is a pure-Node emulator over a fixed command whitelist instead of a real shell | Windows has no `grep`/`sed`/`wc`, and a real shell would make every other guard here decorative: one `sh -c` and the path sandbox is gone. The whitelist gives the model no path to arbitrary code execution. | `pi.registerTool` under the name `bash`, replacing the built-in |
+| `grep` searches UTF-8 and Windows-1252 files alike, with count/files modes and totals | pi's grep hands rg the pattern as-is: on a legacy tree every non-ASCII pattern is a silent false negative and legacy lines print as `J?rg`. A model that gets "No matches found" for `Einträge` concludes the text is not there. | `pi.registerTool` under the name `grep` (`src/grep/`), see "The grep tool" below |
+
+### The grep tool
+
+Same name and original parameters as pi's (`pattern`, `path`, `glob`, `ignoreCase`, `literal`,
+`context`, `limit`), pi's renderers and truncation, plus: `mode` (`content` / `count` /
+`filesWithMatches`), `before` / `after`, `maxCount` (per file), `includeIgnored`, and `encoding`
+(`auto` / `utf-8` / `windows-1252`). Output is `path:line:text` (context `path-line-text`, `--`
+between groups), paths relative to the project root with `/`, CRLF normalised. Every result ends
+with a bracketed summary: total matching lines and files, and `truncated=true/false`. `limit` counts
+matches (content) or files (other modes); context never uses it up. A malformed path (`C:/:/x`) is
+an error, not a silent search. A search is capped at 60 s and says so when it is stopped.
+
+**Encoding, `src/grep/search.ts`.** rg decodes as UTF-8 unless a BOM says otherwise, and
+`--encoding windows-1252` breaks every UTF-8 file instead (including UTF-8 *with* BOM: the explicit
+encoding wins over it). So `auto` runs both passes and takes each file from exactly one: a BOM or
+valid UTF-8 content from the default pass, anything else from the windows-1252 pass
+(`classifyFile`, run only for files that produced a hit). The second pass is skipped when the pattern
+cannot tell the decodings apart (`needsLegacyPass`: ASCII, and nothing like `.`/`[…]`/`\w` that could
+consume a non-ASCII character); legacy lines are then decoded from rg's base64 `lines.bytes`.
+
+**Speed.** rg runs with neither `--sort=path` (single-threaded; 6× slower on a 14k-file repo) nor
+`--binary` (reads every walked binary; 30 s+ with transcoding). Order is made deterministic in JS
+instead: a path-ordered text budget keeps line text only for the first `limit` matches, every
+other file just a count, and match events that can no longer contribute text are counted
+without `JSON.parse`. Typical searches take 0.1–1.5 s on that repo. A search for `e` (7.4M matching
+lines) takes about 11 s, and most of that is rg's own JSON output. As in rg, a binary found while
+walking is skipped; a named one (or one whose NUL comes after a match) is reported, never printed.
+Look-around and backreferences are retried with `--pcre2`.
+
+`grep -r` in the emulator runs on the same engine (`src/shell/ripgrep.ts`). It used to read
+`lines.text`, which rg leaves out for a non-UTF-8 line (it sends `lines.bytes`). Any CP1252 umlaut
+in a matched line crashed it with `Cannot read properties of undefined (reading 'replace')`.
 
 Supported commands: `grep [-rnilvcowqhH] [-e PATTERN]... [-m N] [--include=GLOB] [--exclude-dir=GLOB]`
 (`-c` with an empty pattern counts every line, like real `grep -c ""`; `\(` `\)` `\{` `\}` `\|` `\+`
 `\?` act as the special ERE form even without `-E`, like real BRE grep; repeating `-e` ORs the
 patterns together; `-m`/`--max-count` stops after N matching lines per file, `-c` then reporting the
 counted rather than the actual total; `-A`/`-B`/`-C` context lines are not implemented and fail with
-`grep: unsupported option: -A` rather than being silently ignored; file content is decoded as UTF-8
-(BOM-sniffed, BOM stripped so `^` still anchors) with a latin1/Windows-1252 fallback only for bytes
-that are not valid UTF-8 (the ripgrep fast path, `ripgrep.ts`, decodes natively and needs none of
-this); a binary file reports `grep: <path>: binary file matches` instead of dumping raw bytes, while
+`grep: unsupported option: -A (…use the grep tool's before/after/context…)` rather than being silently
+ignored; a glob operand (`src/*.vb`) is expanded; file content is decoded per file as UTF-8
+(BOM-sniffed, BOM stripped so `^` still anchors) or Windows-1252, on both the JS walk and the
+ripgrep path; a binary file reports `grep: <path>: binary file matches` instead of dumping raw bytes, while
 `-l`/`-c` still answer normally for it), `sed -n 'X,Yp'`, `wc -l`,
 `uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`, `printf 'fmt' [args...]` (`\n`/`\t` escapes and
 `%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating the format over extra args like real `printf`),
@@ -123,10 +156,12 @@ is one of the emulator's built-ins — see `commandState()`).
 `"redirect"` (a `>`/`>>` write) is not a built-in and has no entry in this table, so it defaults to
 `defaultPolicy` ("ask") until you set `/safeguards redirect <state>` explicitly.
 
-## Design note: the one deliberate reimplementation
+## Design note: the two deliberate reimplementations
 
 The house rule (`pi-improved/README.md`) is *never reimplement a pi behaviour we only want to
-adjust*. The emulated `bash` breaks it knowingly: pi's bash spawns a real shell, and the entire point
+adjust*. The `grep` tool breaks it because pi's only seam, `GrepOperations`, covers reading context
+lines, not the search, and the fix is in how rg is invoked; it keeps pi's name, parameters,
+renderers, truncation helpers and `details` fields. The emulated `bash` breaks it knowingly: pi's bash spawns a real shell, and the entire point
 here is that no real shell exists. Everything that is *not* the execution mechanism still tracks pi:
 
 - **Truncation is pi's.** `truncateShellOutput` calls pi's own `truncateTail` with pi's
@@ -148,7 +183,7 @@ back, so `read` may reach a log this extension wrote — and only those (see `sr
 - **Emulated, not equivalent.** `sed` supports only the `'X,Yp'` line-range form, `grep` a subset of
   flags, `>`/`>>` write plain UTF-8 with no forced trailing newline (the content is written exactly
   as the pipeline produced it), and there is no globbing beyond `*`/`?` or subshell. Commands go
-  through pi's built-in `grep` / `find` / `ls` tools where possible; the emulator is the fallback.
+  through the `grep` tool (ours) and pi's `find` / `ls` tools where possible; the emulator is the fallback.
 - **`git` needs git on PATH.** Without it, `git` returns a plain German notice rather than failing
   the tool call.
 - **`cd` used to accept any in-bounds path with no existence check.** A typo'd or already-deleted

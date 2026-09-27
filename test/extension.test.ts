@@ -42,9 +42,9 @@ afterAll(() => {
 });
 
 describe("extension wiring", () => {
-	it("replaces bash and guards tool calls", () => {
+	it("replaces bash and grep and guards tool calls", () => {
 		const { tools, events } = load(root);
-		expect(tools.map((tool) => tool.name)).toEqual(["bash"]);
+		expect(tools.map((tool) => tool.name)).toEqual(["bash", "grep"]);
 		expect(events).toContain("tool_call");
 	});
 
