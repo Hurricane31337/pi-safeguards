@@ -31,6 +31,7 @@ import {
 	parseArgs,
 	splitByPipes,
 	splitStatements,
+	splitTimePrefix,
 } from "./shell/parse.ts";
 
 /** Native pi tool names that duplicate an emulated bash command (see module doc). */
@@ -56,7 +57,8 @@ function isNullTarget(target: string): boolean {
 function programsIn(command: string): string[] {
 	const programs: string[] = [];
 	const { rewritten, bodies } = extractHeredocs(command);
-	for (const statement of splitStatements(rewritten)) {
+	for (const timedStatement of splitStatements(rewritten)) {
+		const statement = splitTimePrefix(timedStatement).rest;
 		const cdMatch = statement.match(/^cd(?:\s+.+)?$/s);
 		if (cdMatch) {
 			programs.push("cd");

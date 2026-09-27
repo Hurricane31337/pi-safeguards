@@ -9,6 +9,19 @@
 const isWindows = process.platform === "win32";
 
 /**
+ * `time [-p] PIPELINE`: in bash `time` is a keyword in front of a whole
+ * pipeline, not a program, so it is peeled off here at statement level -
+ * for the emulator (which times the rest, see executeShellCommand) and for
+ * confirm-guard.ts (which must judge the timed commands, not a program
+ * called "time"). A lone `time` is still timed: bash prints ~0s for it.
+ */
+export function splitTimePrefix(statement: string): { timed: boolean; posix: boolean; rest: string } {
+	const match = statement.match(/^time(?:\s+(-p))?(?:\s+(.*))?$/s);
+	if (!match) return { timed: false, posix: false, rest: statement };
+	return { timed: true, posix: match[1] === "-p", rest: (match[2] ?? "").trim() };
+}
+
+/**
  * Split a command string into statements on `;`, newlines and `&&`, respecting
  * quotes. The emulator has no exit codes to gate on, so `&&` is treated as a
  * plain separator like `;` rather than "run only if the previous succeeded".

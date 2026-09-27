@@ -64,7 +64,9 @@ mode, as rg and the grep tool skip it; binary stdin reports `grep: (standard inp
 per file when given more than one), `find [-name] [-type f/d] [-maxdepth]` (root-relative paths, like
 `./src/x.ts`), `cat` (reads stdin when given no file, like real `cat` in a `x | cat` pass-through),
 `ls [-d]`, `rm [-rf]`, `mv`, `cp [-r] [-n]` (a byte-for-byte copy, so a Windows-1252 file stays
-Windows-1252; a directory needs `-r`, like real `cp`), `mkdir [-p]`, `echo`, `pwd`, `git`, `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
+Windows-1252; a directory needs `-r`, like real `cp`), `mkdir [-p]`, `echo`, `pwd`, `git`, `time [-p]` (a keyword in front of a statement, as in bash: times the
+whole pipeline and prints `real` after the output; user/sys are not measured, since they would cover this Node
+process and not the rg/git children; the timed commands are policy-checked as themselves), `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
 heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)

@@ -38,6 +38,7 @@ import {
 	type RedirectSpec,
 	splitByPipes,
 	splitStatements,
+	splitTimePrefix,
 } from "./parse.ts";
 
 /** Commands available in the emulator, for the tool description and the refusal message. */
@@ -198,6 +199,13 @@ function applyRedirect(
 	return null;
 }
 
+/** `time`'s report: bash's `real\t0m1.234s`, or POSIX `real 1.23` for `time -p`. */
+function formatElapsed(seconds: number, posix: boolean): string {
+	if (posix) return `real ${seconds.toFixed(2)}`;
+	const minutes = Math.floor(seconds / 60);
+	return `\nreal\t${minutes}m${(seconds - minutes * 60).toFixed(3)}s`;
+}
+
 /**
  * Execute a full command string. Statements are split on `;`, newlines and
  * `&&` (see splitStatements); `cd DIR` changes the working directory for every
@@ -224,12 +232,14 @@ export function executeShellCommand(
 	const outputs: string[] = [];
 	const { rewritten, bodies } = extractHeredocs(input);
 
-	for (const statement of splitStatements(rewritten)) {
+	// One statement's output, or null for none. A closure so `cd` can move
+	// workingDir for the statements after it, and so `time` below can wrap
+	// every way a statement ends.
+	const runStatement = (statement: string): string | null => {
 		const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
 		if (cdMatch) {
 			if (commandState("cd", settings, SUPPORTED_COMMANDS) === "deny") {
-				outputs.push("[bash-emulator] 'cd' ist deaktiviert (Einstellungen).");
-				continue;
+				return "[bash-emulator] 'cd' ist deaktiviert (Einstellungen).";
 			}
 			const arg = unquote((cdMatch[1] ?? "").trim());
 			if (arg) {
@@ -248,14 +258,11 @@ export function executeShellCommand(
 					} catch {
 						isDir = false;
 					}
-					if (!isDir) {
-						outputs.push(`cd: no such file or directory: ${arg}`);
-						continue;
-					}
+					if (!isDir) return `cd: no such file or directory: ${arg}`;
 					workingDir = target;
 				}
 			}
-			continue;
+			return null;
 		}
 
 		const redirect = extractRedirect(statement);
@@ -267,13 +274,24 @@ export function executeShellCommand(
 			stdin = executeSegment(heredoc.cleaned, workingDir, root, heredoc.body ?? stdin, settings);
 		}
 
-		if (redirect) {
-			const message = applyRedirect(redirect, stdin ?? "", workingDir, root, settings);
-			if (message) outputs.push(message);
+		if (redirect) return applyRedirect(redirect, stdin ?? "", workingDir, root, settings);
+		return stdin;
+	};
+
+	for (const statement of splitStatements(rewritten)) {
+		const { timed, posix, rest } = splitTimePrefix(statement);
+		if (!timed) {
+			const output = runStatement(statement);
+			if (output !== null) outputs.push(output);
 			continue;
 		}
-
-		if (stdin !== null) outputs.push(stdin);
+		const started = performance.now();
+		const output = rest ? runStatement(rest) : null;
+		if (output !== null && output !== "") outputs.push(output);
+		// bash's format. Only wall-clock time is reported: user/sys would be
+		// this Node process alone, not the rg/git children doing the work, and
+		// a made-up 0.000s is worse than leaving them out.
+		outputs.push(formatElapsed((performance.now() - started) / 1000, posix));
 	}
 
 	return outputs.join("\n");

@@ -85,6 +85,20 @@ describe("confirm guard", () => {
 			expect(await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 		});
 
+		it("judges the command behind `time`, not a program called time", async () => {
+			writeSettings({ commands: { rm: "ask", ls: "allow" }, defaultPolicy: "deny" });
+			const call = guard();
+			const confirm = vi.fn().mockResolvedValue(false);
+			const result = await call("bash", { command: "time rm foo.txt" }, { hasUI: true, ui: { confirm } });
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(result?.block).toBe(true);
+			const quiet = vi.fn();
+			expect(
+				await call("bash", { command: "time -p ls | ls" }, { hasUI: true, ui: { confirm: quiet } }),
+			).toBeUndefined();
+			expect(quiet).not.toHaveBeenCalled();
+		});
+
 		it("does not ask for a command not set to ask", async () => {
 			writeSettings({ commands: { rm: "ask" } });
 			const call = guard();

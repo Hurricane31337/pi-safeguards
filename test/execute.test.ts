@@ -334,6 +334,17 @@ describe("search", () => {
 		expect(run("grep --version")).toContain("not GNU grep");
 	});
 
+	it("time reports the wall-clock time of the whole pipeline after the output", () => {
+		expect(run("time grep -c beta src/a.txt")).toMatch(/^1\n\nreal\t0m\d+\.\d{3}s$/);
+		expect(run("time grep beta src/a.txt src/b.log | head -n 1")).toMatch(
+			/^\.\/src\/a\.txt:beta\n\nreal\t0m\d+\.\d{3}s$/,
+		);
+		expect(run("time -p echo hi")).toMatch(/^hi\nreal \d+\.\d{2}$/);
+		expect(run("time")).toMatch(/^\nreal\t0m0\.\d{3}s$/);
+		// time is a keyword, not a program: the timed command's own policy still applies
+		expect(run("time python -V")).toContain("[bash-emulator] 'python' ist deaktiviert");
+	});
+
 	it("expands a glob operand the way a shell would", () => {
 		expect(run("grep -n beta src/*.txt")).toBe("./src/a.txt:2:beta");
 		expect(run("grep -l beta src/*.log src/*.txt")).toBe("./src/b.log\n./src/a.txt");
