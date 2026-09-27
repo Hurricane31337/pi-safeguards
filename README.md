@@ -57,7 +57,8 @@ ripgrep path; a binary file reports `grep: <path>: binary file matches` instead 
 `head -n`, `tail -n` (both accept one or more file arguments, or stdin, with an `==> name <==` header
 per file when given more than one), `find [-name] [-type f/d] [-maxdepth]` (root-relative paths, like
 `./src/x.ts`), `cat` (reads stdin when given no file, like real `cat` in a `x | cat` pass-through),
-`ls [-d]`, `echo`, `pwd`, `git`, `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
+`ls [-d]`, `rm [-rf]`, `mv`, `cp [-r] [-n]` (a byte-for-byte copy, so a Windows-1252 file stays
+Windows-1252; a directory needs `-r`, like real `cp`), `mkdir [-p]`, `echo`, `pwd`, `git`, `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
 heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
@@ -146,8 +147,8 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 
 | Command | State |
 |---|---|
-| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `printf`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
-| `git`, `mv`, `rm` | `ask` |
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
+| `cp`, `git`, `mv`, `rm` | `ask` |
 
 `/safeguards <command> clear` on one of these resets it back to this table's value rather than to
 the raw built-in default (which would otherwise be `allow` for all of them, since every command here

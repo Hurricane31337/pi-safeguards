@@ -10,7 +10,9 @@
 
 import {
 	closeSync,
+	cpSync,
 	type Dirent,
+	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
@@ -20,7 +22,7 @@ import {
 	statSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { isBlocked, isOutside, isSpilled } from "../paths.ts";
+import { isBlocked, isOutside, isSpilled, pathKey } from "../paths.ts";
 import { globToRegex, parseLineCount } from "./parse.ts";
 import { execRipgrepGrep } from "./ripgrep.ts";
 
@@ -1054,6 +1056,129 @@ export function execRm(args: string[], cwd: string, root: string): string {
 			rmSync(path, { recursive, force });
 		} catch (error) {
 			if (!force) rows.push(`rm: cannot remove '${target}': ${(error as Error).message}`);
+		}
+	}
+	return rows.join("\n");
+}
+
+/**
+ * `mkdir [-p] DIR...`. Without -p, an existing directory or a missing parent
+ * is an error, like real mkdir; with -p both are fine.
+ */
+export function execMkdir(args: string[], cwd: string, root: string): string {
+	let parents = false;
+	const targets: string[] = [];
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--parents") parents = true;
+		else if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of shortFlags(arg)) if (flag === "p") parents = true;
+		} else targets.push(arg);
+	}
+	if (targets.length === 0) return "mkdir: missing operand";
+
+	const rows: string[] = [];
+	for (const target of targets) {
+		const path = resolve(cwd, target);
+		if (isBlocked(path, root)) {
+			rows.push(`Access denied: "${target}" is outside the project directory.`);
+			continue;
+		}
+		let existing: ReturnType<typeof statSync> | null = null;
+		try {
+			existing = statSync(path);
+		} catch {
+			existing = null;
+		}
+		if (existing) {
+			if (!parents || !existing.isDirectory()) rows.push(`mkdir: cannot create directory '${target}': File exists`);
+			continue;
+		}
+		try {
+			mkdirSync(path, { recursive: parents });
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			const reason = code === "ENOENT" ? "No such file or directory" : (error as Error).message;
+			rows.push(`mkdir: cannot create directory '${target}': ${reason}`);
+		}
+	}
+	return rows.join("\n");
+}
+
+/**
+ * `cp [-r] [-n] SOURCE... DEST`: one source to a file or directory, or several
+ * into an existing directory. Bytes are copied as they are, so a
+ * Windows-1252 file stays Windows-1252. A directory needs -r, like real cp;
+ * -n never overwrites an existing file.
+ */
+export function execCp(args: string[], cwd: string, root: string): string {
+	let recursive = false;
+	let noClobber = false;
+	const operands: string[] = [];
+	for (let i = 1; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--recursive") recursive = true;
+		else if (arg === "--no-clobber") noClobber = true;
+		else if (arg.startsWith("-") && arg !== "-") {
+			for (const flag of shortFlags(arg)) {
+				if (flag === "r" || flag === "R" || flag === "a") recursive = true;
+				else if (flag === "n") noClobber = true;
+				// -f, -p, -v: accepted, nothing to do - cp already overwrites and never prints
+			}
+		} else operands.push(arg);
+	}
+	const positional = expandArgs(operands, cwd);
+	if (positional.length === 0) return "cp: missing file operand";
+	if (positional.length === 1) return `cp: missing destination file operand after '${positional[0]}'`;
+
+	const dest = positional[positional.length - 1];
+	const sources = positional.slice(0, -1);
+	const destPath = resolve(cwd, dest);
+	if (isBlocked(destPath, root)) return `Access denied: "${dest}" is outside the project directory.`;
+
+	let destIsDir = false;
+	try {
+		destIsDir = statSync(destPath).isDirectory();
+	} catch {
+		destIsDir = false;
+	}
+	if (sources.length > 1 && !destIsDir) return `cp: target '${dest}' is not a directory`;
+
+	const rows: string[] = [];
+	for (const source of sources) {
+		const sourcePath = resolve(cwd, source);
+		if (isBlocked(sourcePath, root)) {
+			rows.push(`Access denied: "${source}" is outside the project directory.`);
+			continue;
+		}
+		let sourceStat: ReturnType<typeof statSync>;
+		try {
+			sourceStat = statSync(sourcePath);
+		} catch {
+			rows.push(`cp: cannot stat '${source}': No such file or directory`);
+			continue;
+		}
+		if (sourceStat.isDirectory() && !recursive) {
+			rows.push(`cp: -r not specified; omitting directory '${source}'`);
+			continue;
+		}
+		const targetPath = destIsDir ? join(destPath, basename(sourcePath)) : destPath;
+		if (isBlocked(targetPath, root)) {
+			rows.push(`Access denied: "${dest}" is outside the project directory.`);
+			continue;
+		}
+		if (!isOutside(targetPath, sourcePath) && sourceStat.isDirectory()) {
+			rows.push(`cp: cannot copy a directory, '${source}', into itself, '${dest}'`);
+			continue;
+		}
+		if (pathKey(targetPath) === pathKey(sourcePath)) {
+			rows.push(`cp: '${source}' and '${dest}' are the same file`);
+			continue;
+		}
+		try {
+			cpSync(sourcePath, targetPath, { recursive, force: !noClobber, errorOnExist: false });
+		} catch (error) {
+			rows.push(`cp: cannot copy '${source}' to '${dest}': ${(error as Error).message}`);
 		}
 	}
 	return rows.join("\n");

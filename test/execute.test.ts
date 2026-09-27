@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -658,6 +658,56 @@ describe("rm and mv", () => {
 		writeFileSync(join(root, "src", "escaping.txt"), "no\n", "utf8");
 		expect(run(`mv src/escaping.txt ${resolve(outsideFile, "..", "escaped.txt")}`)).toContain("Access denied");
 		run("rm src/escaping.txt");
+	});
+
+	it("mkdir creates a directory; -p creates parents and tolerates an existing one", () => {
+		expect(run("mkdir mk")).toBe("");
+		expect(statSync(join(root, "mk")).isDirectory()).toBe(true);
+		expect(run("mkdir mk")).toBe("mkdir: cannot create directory 'mk': File exists");
+		expect(run("mkdir mk/a/b")).toBe("mkdir: cannot create directory 'mk/a/b': No such file or directory");
+		expect(run("mkdir -p mk/a/b mk")).toBe("");
+		expect(statSync(join(root, "mk", "a", "b")).isDirectory()).toBe(true);
+		expect(run("mkdir")).toBe("mkdir: missing operand");
+		expect(run(`mkdir ${resolve(outsideFile, "..", "mk-outside")}`)).toContain("Access denied");
+		run("rm -r mk");
+	});
+
+	it("cp copies bytes unchanged, into a directory, and a tree with -r", () => {
+		const legacy = Buffer.from([0x66, 0xfc, 0x72, 0x0d, 0x0a]);
+		writeFileSync(join(root, "src", "cp-src.txt"), legacy);
+		run("mkdir -p cpdir");
+		expect(run("cp src/cp-src.txt src/cp-dst.txt")).toBe("");
+		expect(readFileSync(join(root, "src", "cp-dst.txt")).equals(legacy)).toBe(true);
+		expect(run("cp src/cp-src.txt src/cp-dst.txt cpdir")).toBe("");
+		expect(readFileSync(join(root, "cpdir", "cp-dst.txt")).equals(legacy)).toBe(true);
+		expect(run("cp cpdir cpdir2")).toBe("cp: -r not specified; omitting directory 'cpdir'");
+		expect(run("cp -r cpdir cpdir2")).toBe("");
+		expect(readFileSync(join(root, "cpdir2", "cp-src.txt")).equals(legacy)).toBe(true);
+		run("rm -r cpdir cpdir2 src/cp-src.txt src/cp-dst.txt");
+	});
+
+	it("cp -n keeps an existing file; errors name the operand", () => {
+		writeFileSync(join(root, "src", "keep-a.txt"), "new\n", "utf8");
+		writeFileSync(join(root, "src", "keep-b.txt"), "old\n", "utf8");
+		expect(run("cp -n src/keep-a.txt src/keep-b.txt")).toBe("");
+		expect(readFileSync(join(root, "src", "keep-b.txt"), "utf8")).toBe("old\n");
+		expect(run("cp src/nope.txt src/x.txt")).toBe("cp: cannot stat 'src/nope.txt': No such file or directory");
+		expect(run("cp src/keep-a.txt src/keep-a.txt")).toBe(
+			"cp: 'src/keep-a.txt' and 'src/keep-a.txt' are the same file",
+		);
+		expect(run("cp src/keep-a.txt src/keep-b.txt src/keep-a.txt")).toBe(
+			"cp: target 'src/keep-a.txt' is not a directory",
+		);
+		expect(run("cp src/keep-a.txt")).toBe("cp: missing destination file operand after 'src/keep-a.txt'");
+		run("rm src/keep-a.txt src/keep-b.txt");
+	});
+
+	it("cp refuses to copy out of or into a place outside the root, or a directory into itself", () => {
+		expect(run(`cp ${outsideFile} src/stolen.txt`)).toContain("Access denied");
+		expect(run(`cp src/a.txt ${resolve(outsideFile, "..", "leaked.txt")}`)).toContain("Access denied");
+		run("mkdir -p self");
+		expect(run("cp -r self self/inner")).toBe("cp: cannot copy a directory, 'self', into itself, 'self/inner'");
+		run("rm -r self");
 	});
 });
 

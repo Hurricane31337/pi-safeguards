@@ -93,13 +93,13 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"==> name <== header per file when given more than one), find [-name] [-type f/d] [-maxdepth] " +
 			"(paths are root-relative, like ./src/x; descends into dot-directories too, same as grep -r, " +
 			"except .git and node_modules), cat (reads stdin when given no file, like real cat in " +
-			"a `x | cat` pass-through), ls [-d], cd, rm [-rf], mv, echo, pwd. " +
-			"Glob patterns like *.py are expanded for wc, rm and mv. " +
+			"a `x | cat` pass-through), ls [-d], cd, rm [-rf], mv, cp [-r] [-n] (copies bytes as they are, so a file keeps its encoding), mkdir [-p], echo, pwd. " +
+			"Glob patterns like *.py are expanded for wc, grep, rm, mv and cp. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
 			"(cd changes the directory for statements after it in the same command); there are no exit " +
 			"codes, so && never skips a later statement even if an earlier one failed. " +
-			"cd, rm and mv can only reach the project directory and below; cd to a nonexistent path or a " +
+			"cd, rm, mv, cp and mkdir can only reach the project directory and below; cd to a nonexistent path or a " +
 			'file reports "cd: no such file or directory" and does not move, same as real cd. ' +
 			"There is no $VAR expansion or FOO=bar assignment syntax anywhere - a literal $VAR or " +
 			"FOO=bar in a command is passed through as-is, not expanded or executed as an assignment. " +

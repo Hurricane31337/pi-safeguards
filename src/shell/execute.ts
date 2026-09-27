@@ -13,10 +13,12 @@ import { isBlocked, isOutside } from "../paths.ts";
 import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "../settings.ts";
 import {
 	execCat,
+	execCp,
 	execFind,
 	execGrep,
 	execHead,
 	execLs,
+	execMkdir,
 	execMv,
 	execPrintf,
 	execRm,
@@ -56,6 +58,8 @@ export const SUPPORTED_COMMANDS = [
 	"cd",
 	"rm",
 	"mv",
+	"cp",
+	"mkdir",
 	"git",
 ] as const;
 
@@ -117,6 +121,10 @@ function executeSegment(
 				return execRm(args, cwd, root);
 			case "mv":
 				return execMv(args, cwd, root);
+			case "cp":
+				return execCp(args, cwd, root);
+			case "mkdir":
+				return execMkdir(args, cwd, root);
 			case "echo":
 				return args.slice(1).join(" ");
 			case "pwd":
