@@ -95,6 +95,13 @@ describe("commandState", () => {
 		const settings = { commands: {}, defaultPolicy: "ask" } as const;
 		expect(commandState("npm", settings, builtins)).toBe("ask");
 	});
+
+	it("uses the shipped default for a command the file predates, not a built-in's allow", () => {
+		// A safeguards.json written before cp/mkdir existed.
+		const settings = { commands: { rm: "ask", ls: "allow" }, defaultPolicy: "ask" } as const;
+		expect(commandState("cp", settings, [...builtins, "cp", "mkdir"])).toBe("ask");
+		expect(commandState("mkdir", settings, [...builtins, "cp", "mkdir"])).toBe("allow");
+	});
 });
 
 describe("getSafeguardsJsonPath", () => {

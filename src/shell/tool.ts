@@ -12,7 +12,7 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { loadSafeguardsSettings } from "../settings.ts";
+import { commandState, loadSafeguardsSettings } from "../settings.ts";
 import { executeShellCommand, SUPPORTED_COMMANDS } from "./execute.ts";
 import { truncateShellOutput } from "./output.ts";
 
@@ -39,15 +39,16 @@ interface BashDetails {
  */
 function describeCommandPolicy(): string {
 	const settings = loadSafeguardsSettings();
-	const denied = Object.entries(settings.commands)
-		.filter(([, s]) => s === "deny")
-		.map(([name]) => name);
-	const asked = Object.entries(settings.commands)
-		.filter(([, s]) => s === "ask")
-		.map(([name]) => name);
-	const allowed = Object.entries(settings.commands)
-		.filter(([, s]) => s === "allow")
-		.map(([name]) => name);
+	// Effective states, not just the file's entries: a built-in the file
+	// predates (cp) still asks per its shipped default.
+	const builtins = SUPPORTED_COMMANDS as readonly string[];
+	const names = [...new Set([...builtins, ...Object.keys(settings.commands)])];
+	const withState = (state: string) =>
+		names.filter((name) => commandState(name, settings, SUPPORTED_COMMANDS) === state);
+	const denied = withState("deny");
+	const asked = withState("ask");
+	// An allowed built-in is the unremarkable case; only name the others.
+	const allowed = withState("allow").filter((name) => !builtins.includes(name));
 
 	const parts: string[] = [];
 	if (denied.length > 0) parts.push(`disabled: ${denied.join(", ")}`);

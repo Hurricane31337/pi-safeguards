@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "@earendil-works/pi-coding-agent";
@@ -45,6 +45,26 @@ describe("/safeguards command", () => {
 		await call("");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("defaultPolicy: ask"), "info");
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("rm: ask"), "info");
+	});
+
+	it("lists built-ins missing from an older safeguards.json with their shipped default", async () => {
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ commands: { rm: "ask", ls: "allow" }, defaultPolicy: "ask" }),
+			"utf8",
+		);
+		const { call, notify } = command();
+		await call("");
+		const text = notify.mock.calls[0][0] as string;
+		expect(text).toContain("Built-in commands without an override (shipped default applies):");
+		expect(text).toContain("  cp: ask");
+		expect(text).toContain("  mkdir: allow");
+		expect(text).not.toMatch(/without an override[\s\S]*\n {2}rm:/);
+		await call("cp");
+		expect(notify).toHaveBeenLastCalledWith(
+			`'cp' has no override - effective state is "ask" (shipped default).`,
+			"info",
+		);
 	});
 
 	it("surfaces the 'redirect' pseudo-command even with no override set", async () => {

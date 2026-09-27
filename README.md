@@ -154,6 +154,11 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 | `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
 | `cp`, `git`, `mv`, `rm` | `ask` |
 
+A command with no entry in `safeguards.json` resolves to this table, then `allow` for any other
+built-in, then `defaultPolicy` (`shippedCommandState()`). A file written before a command existed therefore
+gets the shipped state for it: `cp` asks rather than being allowed as a built-in. `/safeguards` lists
+those built-ins under "without an override", so they are visible too.
+
 `/safeguards <command> clear` on one of these resets it back to this table's value rather than to
 the raw built-in default (which would otherwise be `allow` for all of them, since every command here
 is one of the emulator's built-ins — see `commandState()`).

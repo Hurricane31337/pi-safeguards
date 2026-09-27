@@ -30,6 +30,7 @@ import {
 	PSEUDO_COMMANDS,
 	type SafeguardsSettings,
 	saveSafeguardsSettings,
+	shippedCommandState,
 } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
 
@@ -54,6 +55,16 @@ function describePolicy(settings: SafeguardsSettings): string {
 	} else {
 		lines.push("Overrides:");
 		for (const [name, state] of entries) lines.push(`  ${name}: ${state}`);
+	}
+
+	// A safeguards.json written before a command existed has no entry for
+	// it; listing only the file's entries made mkdir/cp invisible there.
+	const builtinsUnset = [...SUPPORTED_COMMANDS].filter((name) => !(name in settings.commands)).sort();
+	if (builtinsUnset.length > 0) {
+		lines.push("Built-in commands without an override (shipped default applies):");
+		for (const name of builtinsUnset) {
+			lines.push(`  ${name}: ${shippedCommandState(name, settings, SUPPORTED_COMMANDS)}`);
+		}
 	}
 
 	const unset = PSEUDO_COMMANDS.filter((name) => !(name in settings.commands));
@@ -122,7 +133,11 @@ export function registerSafeguardsCommand(pi: ExtensionAPI, settingsPath?: strin
 					explicit
 						? `'${name}' is explicitly set to "${explicit}".`
 						: `'${name}' has no override - effective state is "${effective}" (${
-								(SUPPORTED_COMMANDS as readonly string[]).includes(name) ? "built-in default" : "defaultPolicy"
+								DEFAULT_SAFEGUARDS_SETTINGS.commands[name]
+									? "shipped default"
+									: (SUPPORTED_COMMANDS as readonly string[]).includes(name)
+										? "built-in default"
+										: "defaultPolicy"
 							}).`,
 					"info",
 				);

@@ -171,7 +171,22 @@ export function saveSafeguardsSettings(settings: SafeguardsSettings, path: strin
  * execute.ts already imports this module for SafeguardsSettings itself.
  */
 export function commandState(program: string, settings: SafeguardsSettings, builtins: readonly string[]): CommandState {
-	const explicit = settings.commands[program];
-	if (explicit) return explicit;
+	return settings.commands[program] ?? shippedCommandState(program, settings, builtins);
+}
+
+/**
+ * What a command resolves to with no entry in safeguards.json: its shipped
+ * default when it has one, "allow" for any other built-in, else
+ * defaultPolicy. The shipped table matters for a file written before a
+ * command existed - cp added later must still ask on a machine whose
+ * safeguards.json predates it, not fall through to a built-in's "allow".
+ */
+export function shippedCommandState(
+	program: string,
+	settings: SafeguardsSettings,
+	builtins: readonly string[],
+): CommandState {
+	const shipped = DEFAULT_SAFEGUARDS_SETTINGS.commands[program];
+	if (shipped) return shipped;
 	return builtins.includes(program) ? "allow" : settings.defaultPolicy;
 }
