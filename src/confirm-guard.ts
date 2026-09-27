@@ -25,6 +25,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
 import {
+	commandChain,
 	extractHeredocs,
 	extractRedirect,
 	heredocBodyFor,
@@ -58,7 +59,9 @@ function programsIn(command: string): string[] {
 	const programs: string[] = [];
 	const { rewritten, bodies } = extractHeredocs(command);
 	for (const timedStatement of splitStatements(rewritten)) {
-		const statement = splitTimePrefix(timedStatement).rest;
+		// `time` is a command with a policy of its own, and so is what it runs.
+		const { timed, rest: statement } = splitTimePrefix(timedStatement);
+		if (timed) programs.push("time");
 		const cdMatch = statement.match(/^cd(?:\s+.+)?$/s);
 		if (cdMatch) {
 			programs.push("cd");
@@ -75,8 +78,9 @@ function programsIn(command: string): string[] {
 				.replace(/\s+2>\/dev\/null/g, "")
 				.replace(/\s+2>\s*nul\b/gi, "")
 				.trim();
-			const args = parseArgs(withoutStderrRedirect);
-			if (args.length > 0) programs.push(args[0]);
+			// Every program the segment runs, not just argv[0]: `env python x`
+			// is python as much as it is env (see commandChain in parse.ts).
+			programs.push(...commandChain(parseArgs(withoutStderrRedirect)));
 		}
 	}
 	return programs;

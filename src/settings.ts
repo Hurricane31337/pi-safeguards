@@ -84,6 +84,7 @@ export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
 		sed: "allow",
 		sort: "allow",
 		tail: "allow",
+		time: "allow",
 		uniq: "allow",
 		wc: "allow",
 	},

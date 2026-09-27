@@ -31,6 +31,7 @@ import {
 import { execExternal } from "./external.ts";
 import { execGit } from "./git.ts";
 import {
+	commandChain,
 	extractHeredocs,
 	extractRedirect,
 	heredocBodyFor,
@@ -61,6 +62,7 @@ export const SUPPORTED_COMMANDS = [
 	"mv",
 	"cp",
 	"mkdir",
+	"time",
 	"git",
 ] as const;
 
@@ -87,13 +89,18 @@ function executeSegment(
 	// "ask" reaches here only after confirm-guard.ts's tool_call hook already
 	// asked and the user approved - by this point it must run exactly like
 	// "allow" would. Only whether a prompt happened first differs between the
-	// two, and that decision was already made upstream.
-	if (commandState(program, settings, SUPPORTED_COMMANDS) === "deny") {
-		return (
-			`[bash-emulator] '${program}' ist deaktiviert (Einstellungen).\n` +
-			`Verfuegbar: ${SUPPORTED_COMMANDS.join(", ")}\n` +
-			"Oder nutze die nativen pi-Tools: read, write, edit, grep, find, ls"
-		);
+	// two, and that decision was already made upstream. Every program in the
+	// chain is checked: `env python` must not run a denied python.
+	const denied = commandChain(args).find((name) => commandState(name, settings, SUPPORTED_COMMANDS) === "deny");
+	if (denied) return deniedMessage(denied);
+
+	// `a | time b`: bash hands this to /usr/bin/time, which times b alone.
+	if (program === "time") {
+		const { posix, rest } = splitTimePrefix(command);
+		const started = performance.now();
+		const output = rest ? executeSegment(rest, cwd, root, stdin, settings) : "";
+		const elapsed = formatElapsed((performance.now() - started) / 1000, posix);
+		return output ? `${output}\n${elapsed}` : elapsed;
 	}
 
 	try {
@@ -199,6 +206,14 @@ function applyRedirect(
 	return null;
 }
 
+function deniedMessage(program: string): string {
+	return (
+		`[bash-emulator] '${program}' ist deaktiviert (Einstellungen).\n` +
+		`Verfuegbar: ${SUPPORTED_COMMANDS.join(", ")}\n` +
+		"Oder nutze die nativen pi-Tools: read, write, edit, grep, find, ls"
+	);
+}
+
 /** `time`'s report: bash's `real\t0m1.234s`, or POSIX `real 1.23` for `time -p`. */
 function formatElapsed(seconds: number, posix: boolean): string {
 	if (posix) return `real ${seconds.toFixed(2)}`;
@@ -283,6 +298,10 @@ export function executeShellCommand(
 		if (!timed) {
 			const output = runStatement(statement);
 			if (output !== null) outputs.push(output);
+			continue;
+		}
+		if (commandState("time", settings, SUPPORTED_COMMANDS) === "deny") {
+			outputs.push(deniedMessage("time"));
 			continue;
 		}
 		const started = performance.now();

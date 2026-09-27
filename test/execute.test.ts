@@ -341,8 +341,27 @@ describe("search", () => {
 		);
 		expect(run("time -p echo hi")).toMatch(/^hi\nreal \d+\.\d{2}$/);
 		expect(run("time")).toMatch(/^\nreal\t0m0\.\d{3}s$/);
-		// time is a keyword, not a program: the timed command's own policy still applies
+		// the timed command's own policy still applies
 		expect(run("time python -V")).toContain("[bash-emulator] 'python' ist deaktiviert");
+		expect(run("echo a | time wc -l")).toMatch(/^\s*1\n\nreal\t0m\d+\.\d{3}s$/);
+	});
+
+	it("time has a policy of its own; a denied time runs nothing", () => {
+		writeFileSync(join(root, "src", "untouched.txt"), "x", "utf8");
+		const output = runWith("time rm src/untouched.txt", { commands: { time: "deny", rm: "allow" } });
+		expect(output).toContain("[bash-emulator] 'time' ist deaktiviert");
+		expect(readFileSync(join(root, "src", "untouched.txt"), "utf8")).toBe("x");
+		expect(runWith("echo a | time wc -l", { commands: { time: "deny" } })).toContain("'time' ist deaktiviert");
+		run("rm src/untouched.txt");
+	});
+
+	it("checks the program a wrapper runs, not just the wrapper", () => {
+		expect(runWith("env python -V", { commands: { env: "allow", python: "deny" } })).toContain(
+			"[bash-emulator] 'python' ist deaktiviert",
+		);
+		expect(runWith("nice -n 5 python -V", { commands: { nice: "allow", python: "deny" } })).toContain(
+			"'python' ist deaktiviert",
+		);
 	});
 
 	it("expands a glob operand the way a shell would", () => {

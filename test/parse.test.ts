@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	commandChain,
 	extractHeredocs,
 	extractRedirect,
 	globToRegex,
@@ -9,6 +10,30 @@ import {
 	splitByPipes,
 	splitStatements,
 } from "../src/shell/parse.js";
+
+describe("commandChain", () => {
+	it("follows wrappers to the program they run, skipping their options and values", () => {
+		expect(commandChain(["python", "-V"])).toEqual(["python"]);
+		expect(commandChain(["time", "-p", "python", "-V"])).toEqual(["time", "python"]);
+		expect(commandChain(["env", "-u", "HOME", "FOO=bar", "python", "x.py"])).toEqual(["env", "python"]);
+		expect(commandChain(["nice", "-n", "10", "npm", "test"])).toEqual(["nice", "npm"]);
+		expect(commandChain(["timeout", "-s", "KILL", "5s", "curl", "x"])).toEqual(["timeout", "curl"]);
+		expect(commandChain(["xargs", "-I", "{}", "rm", "{}"])).toEqual(["xargs", "rm"]);
+		expect(commandChain(["env", "nice", "sudo", "-u", "root", "rm", "-rf", "x"])).toEqual([
+			"env",
+			"nice",
+			"sudo",
+			"rm",
+		]);
+		expect(commandChain(["nohup", "--", "node", "a.js"])).toEqual(["nohup", "node"]);
+	});
+
+	it("stops at a wrapper with nothing to run", () => {
+		expect(commandChain(["env"])).toEqual(["env"]);
+		expect(commandChain(["time"])).toEqual(["time"]);
+		expect(commandChain([])).toEqual([]);
+	});
+});
 
 describe("splitStatements", () => {
 	it("splits on semicolons, newlines and &&", () => {

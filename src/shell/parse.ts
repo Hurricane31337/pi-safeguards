@@ -9,6 +9,66 @@
 const isWindows = process.platform === "win32";
 
 /**
+ * Programs whose job is to run another program named in their own
+ * arguments, and the options of theirs that take a separate value (so the
+ * value is not mistaken for the program). A policy that only looked at argv[0]
+ * let `env python x` run a denied python as soon as env was allowed.
+ */
+const WRAPPERS: Record<string, { valueOptions: readonly string[]; leadingOperands?: number; assignments?: boolean }> = {
+	time: { valueOptions: [] },
+	env: { valueOptions: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], assignments: true },
+	nice: { valueOptions: ["-n", "--adjustment"] },
+	nohup: { valueOptions: [] },
+	// timeout [OPTION] DURATION COMMAND
+	timeout: { valueOptions: ["-s", "--signal", "-k", "--kill-after"], leadingOperands: 1 },
+	xargs: {
+		valueOptions: ["-I", "-n", "-L", "-P", "-d", "-s", "-E", "-a", "--max-args", "--max-lines", "--max-procs"],
+	},
+	command: { valueOptions: [] },
+	exec: { valueOptions: ["-a"] },
+	sudo: { valueOptions: ["-u", "-g", "-p", "-C", "-D", "-r", "-t", "-U", "-h"] },
+	stdbuf: { valueOptions: ["-i", "-o", "-e"] },
+};
+
+/**
+ * Every program a command line would run: argv[0], and - when that is a
+ * wrapper - the program it runs, recursively (`env nice python` -> env, nice,
+ * python). Each one is subject to the policy on its own, the same way every
+ * stage of a pipe is.
+ */
+export function commandChain(args: string[]): string[] {
+	const chain: string[] = [];
+	let rest = args;
+	while (rest.length > 0) {
+		const program = rest[0];
+		chain.push(program);
+		const wrapper = WRAPPERS[program];
+		if (!wrapper) break;
+		let i = 1;
+		let operandsToSkip = wrapper.leadingOperands ?? 0;
+		for (; i < rest.length; i++) {
+			const arg = rest[i];
+			if (arg === "--") {
+				i++;
+				break;
+			}
+			if (arg.startsWith("-") && arg.length > 1) {
+				if (wrapper.valueOptions.includes(arg)) i++;
+				continue;
+			}
+			if (wrapper.assignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) continue;
+			if (operandsToSkip > 0) {
+				operandsToSkip--;
+				continue;
+			}
+			break;
+		}
+		rest = rest.slice(i);
+	}
+	return chain;
+}
+
+/**
  * `time [-p] PIPELINE`: in bash `time` is a keyword in front of a whole
  * pipeline, not a program, so it is peeled off here at statement level -
  * for the emulator (which times the rest, see executeShellCommand) and for

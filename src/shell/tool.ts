@@ -98,8 +98,9 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"Glob patterns like *.py are expanded for wc, grep, rm, mv and cp. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"time [-p] before a statement times all of it (pipes and redirect included) and prints the wall-clock " +
-			"time after its output, as bash does (real only - user/sys are not measured); the timed commands are " +
-			"governed by their own policy, not by time. " +
+			"time after its output, as bash does (real only - user/sys are not measured). time has a policy of its " +
+			"own, and the command it times is checked as well - the same for wrappers like env, nice, timeout, " +
+			"xargs or sudo: every program they would run must be permitted. " +
 			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
 			"(cd changes the directory for statements after it in the same command); there are no exit " +
 			"codes, so && never skips a later statement even if an earlier one failed. " +

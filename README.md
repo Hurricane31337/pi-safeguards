@@ -66,7 +66,7 @@ per file when given more than one), `find [-name] [-type f/d] [-maxdepth]` (root
 `ls [-d]`, `rm [-rf]`, `mv`, `cp [-r] [-n]` (a byte-for-byte copy, so a Windows-1252 file stays
 Windows-1252; a directory needs `-r`, like real `cp`), `mkdir [-p]`, `echo`, `pwd`, `git`, `time [-p]` (a keyword in front of a statement, as in bash: times the
 whole pipeline and prints `real` after the output; user/sys are not measured, since they would cover this Node
-process and not the rg/git children; the timed commands are policy-checked as themselves), `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
+process and not the rg/git children), `|` chaining, `>`/`>>` output redirection, and a `<<'EOF' ... EOF`
 heredoc as a command's stdin.
 `git` is the one real program: it is spawned as an argv array, never through a shell.
 Anything else — interpreters and shells (`python`, `node`, `npm`, `curl`, `bash`, `powershell`, …)
@@ -155,8 +155,16 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 
 | Command | State |
 |---|---|
-| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `uniq`, `wc` | `allow` |
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `time`, `uniq`, `wc` | `allow` |
 | `cp`, `git`, `mv`, `rm` | `ask` |
+
+**Every program in a chain is checked, not just the first.** Each pipe stage and statement is
+checked separately, and so is what a wrapper runs: `time` has its own entry and the command it times
+is checked too, and the same applies to external wrappers whose job is to start another program
+(`env`, `nice`, `nohup`, `timeout`, `xargs`, `command`, `exec`, `sudo`, `stdbuf`; `commandChain()`
+in `parse.ts` skips their options, so `env FOO=1 nice -n 5 python x` is env, nice and python). Any deny
+blocks the whole command; any ask prompts once for it. Before this, allowing `env` allowed a denied
+`python` behind it.
 
 A command with no entry in `safeguards.json` resolves to this table, then `allow` for any other
 built-in, then `defaultPolicy` (`shippedCommandState()`). A file written before a command existed therefore

@@ -85,6 +85,37 @@ describe("confirm guard", () => {
 			expect(await call("bash", { command: "rm foo.txt" }, { hasUI: true, ui: { confirm } })).toBeUndefined();
 		});
 
+		it("checks both time and the command it times", async () => {
+			writeSettings({ commands: { time: "ask", ls: "allow" }, defaultPolicy: "deny" });
+			const askTime = vi.fn().mockResolvedValue(true);
+			expect(
+				await guard()("bash", { command: "time ls" }, { hasUI: true, ui: { confirm: askTime } }),
+			).toBeUndefined();
+			expect(askTime).toHaveBeenCalledOnce();
+
+			writeSettings({ commands: { time: "deny", ls: "allow" } });
+			const never = vi.fn();
+			const denied = await guard()("bash", { command: "time ls" }, { hasUI: true, ui: { confirm: never } });
+			expect(denied).toEqual({ block: true, reason: "'time' ist deaktiviert (Einstellungen)." });
+			expect(never).not.toHaveBeenCalled();
+
+			writeSettings({ commands: { time: "allow", python: "deny" } });
+			const inner = await guard()("bash", { command: "time python -V" }, { hasUI: true, ui: { confirm: never } });
+			expect(inner).toEqual({ block: true, reason: "'python' ist deaktiviert (Einstellungen)." });
+		});
+
+		it("checks the program behind a wrapper like env", async () => {
+			writeSettings({ commands: { env: "allow", python: "deny" } });
+			const never = vi.fn();
+			const result = await guard()(
+				"bash",
+				{ command: "env FOO=1 python x.py" },
+				{ hasUI: true, ui: { confirm: never } },
+			);
+			expect(result).toEqual({ block: true, reason: "'python' ist deaktiviert (Einstellungen)." });
+			expect(never).not.toHaveBeenCalled();
+		});
+
 		it("judges the command behind `time`, not a program called time", async () => {
 			writeSettings({ commands: { rm: "ask", ls: "allow" }, defaultPolicy: "deny" });
 			const call = guard();
