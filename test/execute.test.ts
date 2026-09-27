@@ -314,6 +314,26 @@ describe("search", () => {
 		);
 	});
 
+	it("skips a binary met while walking in every mode, like the rg path; a named one still answers", () => {
+		expect(run("grep -rc Label src")).not.toContain("binary.dat");
+		expect(run("grep -rno Label src")).not.toContain("binary.dat");
+		expect(run("grep -c Label src/binary.dat")).toBe("1");
+		expect(run("grep Label src/binary.dat")).toBe("grep: ./src/binary.dat: binary file matches");
+	});
+
+	it("reports binary stdin instead of printing it", () => {
+		expect(run("cat src/binary.dat | grep Label")).toBe("grep: (standard input): binary file matches");
+		expect(run("cat src/binary.dat | grep nothing-here")).toBe("");
+	});
+
+	it("reports a missing operand under -r like any other command, not as an rg IO error", () => {
+		expect(run("grep -rn beta src/nope")).toBe("grep: src/nope: No such file or directory");
+	});
+
+	it("answers --version honestly", () => {
+		expect(run("grep --version")).toContain("not GNU grep");
+	});
+
 	it("expands a glob operand the way a shell would", () => {
 		expect(run("grep -n beta src/*.txt")).toBe("./src/a.txt:2:beta");
 		expect(run("grep -l beta src/*.log src/*.txt")).toBe("./src/b.log\n./src/a.txt");

@@ -241,10 +241,13 @@ function grepInPath(
 	if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return;
 
 	// GNU grep's own binary heuristic: a NUL byte in the leading block means
-	// "not text". -l/-c still need a real answer (does/how-many-times a
-	// binary file match), so this doesn't short-circuit before reading the
-	// content below - it only changes what gets printed for a match.
+	// "not text". A binary met while walking a directory is skipped, the way
+	// rg (the -r fast path) and the grep tool skip it - otherwise the same
+	// search saw different files depending on whether -o/-c/-lv routed it
+	// here. A binary named directly is searched: -l/-c answer normally and a
+	// match prints GNU grep's one-line notice, never the content.
 	const binary = isBinaryFile(path);
+	if (binary && topLevelLabel === null) return;
 
 	const content = readFileSafe(path);
 	if (!content) return;
@@ -365,6 +368,9 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--") continue;
+		if (arg === "--version") {
+			return "grep (pi-safeguards bash emulator, not GNU grep): BRE by default, -E for ERE; UTF-8 and Windows-1252 decoded per file. The grep tool has count/files modes, context and totals.";
+		}
 		if (arg === "-e" && i + 1 < args.length) {
 			patterns.push(args[++i]);
 			positionalPatternTaken = true;
@@ -487,6 +493,11 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 	if (targets.length === 0 && stdin !== null) {
 		const lines = stdin.split("\n");
 		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		// `cat some.dll | grep x` used to print the raw line; real grep says this.
+		if (stdin.includes("\0") && !flags.countOnly) {
+			const matched = lines.some((line) => regex.test(line) !== flags.invert);
+			return quiet || !matched ? "" : "grep: (standard input): binary file matches";
+		}
 		if (flags.countOnly) {
 			let count = 0;
 			for (const line of lines) {
@@ -522,11 +533,28 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 		// -o also stays on the JS path - rg's --json output already gives
 		// exact match spans, but reusing them would need a second output
 		// format in ripgrep.ts for a flag this rare.
+		// Every other error message in this emulator (cat/wc/uniq/sort/head/
+		// tail/ls/rm's own "Is a directory") echoes the operand as typed,
+		// cwd-relative - not the root-relative "./" form match output uses.
+		const shownOf = (target: string) => relative(cwd, target).replace(/\\/g, "/") || target;
+		// Checked before either search runs: a missing target used to be
+		// silent in the JS walk (indistinguishable from "no matches") and,
+		// once -r went through rg, surfaced as rg's raw "IO error ... (os
+		// error 2)" with the absolute path.
+		const existingTargets: string[] = [];
+		for (const target of targets) {
+			if (isBlocked(target, root)) continue;
+			try {
+				statSync(target);
+				existingTargets.push(target);
+			} catch {
+				results.push(`grep: ${shownOf(target)}: No such file or directory`);
+			}
+		}
 		let usedRipgrep = false;
 		if (flags.recursive && !flags.countOnly && !(flags.invert && flags.filesOnly) && !flags.onlyMatching) {
-			const validTargets = targets.filter((target) => !isBlocked(target, root));
-			if (validTargets.length > 0) {
-				const fast = execRipgrepGrep(regex.source, validTargets, root, {
+			if (existingTargets.length > 0) {
+				const fast = execRipgrepGrep(regex.source, existingTargets, root, {
 					ignoreCase,
 					invert: flags.invert,
 					lineNumbers: flags.lineNumbers,
@@ -543,28 +571,8 @@ export function execGrep(args: string[], cwd: string, root: string, stdin: strin
 			}
 		}
 		if (!usedRipgrep) {
-			for (const target of targets) {
-				if (isBlocked(target, root)) continue;
-				// Every other error message in this emulator (cat/wc/uniq/sort/
-				// head/tail/ls/rm's own "Is a directory") echoes the operand as
-				// typed, cwd-relative - not the root-relative "./" form match
-				// output uses. The "Is a directory" message below used to be the
-				// one exception, built from the same root-relative `rel` a
-				// successful match line gets, so the two error kinds a single
-				// grep call can produce disagreed on which path convention to use.
-				const shown = relative(cwd, target).replace(/\\/g, "/") || target;
-				// A missing target used to fall straight into grepInPath's own
-				// silent statSync catch (there to let a recursive walk skip an
-				// entry that vanished mid-scan), so a typo'd filename looked
-				// exactly like "no matches" instead of an error - every other
-				// command here (cat, wc, uniq, sort) reports this case.
-				try {
-					statSync(target);
-				} catch {
-					results.push(`grep: ${shown}: No such file or directory`);
-					continue;
-				}
-				grepInPath(target, regex, flags, root, results, showFile, includeGlob, excludeDirGlob, shown);
+			for (const target of existingTargets) {
+				grepInPath(target, regex, flags, root, results, showFile, includeGlob, excludeDirGlob, shownOf(target));
 			}
 		}
 		// The ripgrep fast path walks a directory tree in parallel, so the same

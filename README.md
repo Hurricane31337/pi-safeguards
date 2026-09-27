@@ -54,8 +54,10 @@ counted rather than the actual total; `-A`/`-B`/`-C` context lines are not imple
 `grep: unsupported option: -A (…use the grep tool's before/after/context…)` rather than being silently
 ignored; a glob operand (`src/*.vb`) is expanded; file content is decoded per file as UTF-8
 (BOM-sniffed, BOM stripped so `^` still anchors) or Windows-1252, on both the JS walk and the
-ripgrep path; a binary file reports `grep: <path>: binary file matches` instead of dumping raw bytes, while
-`-l`/`-c` still answer normally for it), `sed -n 'X,Yp'`, `wc -l`,
+ripgrep path; a binary file named directly reports `grep: <path>: binary file matches` instead of dumping raw
+bytes, while `-l`/`-c` still answer normally for it; one met while walking a directory is skipped in every
+mode, as rg and the grep tool skip it; binary stdin reports `grep: (standard input): binary file matches`;
+`--version` says it is the emulator), `sed -n 'X,Yp'`, `wc -l`,
 `uniq [-c] [-d] [-u]`, `sort [-r] [-u] [-n]`, `printf 'fmt' [args...]` (`\n`/`\t` escapes and
 `%s`/`%d`/`%f`/`%o`/`%x`/`%X` substitution, repeating the format over extra args like real `printf`),
 `head -n`, `tail -n` (both accept one or more file arguments, or stdin, with an `==> name <==` header
