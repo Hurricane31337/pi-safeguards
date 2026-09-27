@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -45,7 +46,12 @@ function piAliases(root: string) {
 export default defineConfig({
 	test: {
 		include: ["test/**/*.test.ts"],
-		env: piRoot ? { PI_ROOT: piRoot } : {},
+		env: {
+			...(piRoot ? { PI_ROOT: piRoot } : {}),
+			// Never the developer's real safeguards.json: loading the extension
+			// migrates that file, and tests must see the shipped defaults.
+			PI_SAFEGUARDS_JSON_PATH: resolve(tmpdir(), "pi-safeguards-tests-no-such-dir", "safeguards.json"),
+		},
 	},
 	resolve: {
 		alias: piRoot ? piAliases(piRoot) : [],

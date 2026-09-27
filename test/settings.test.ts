@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
 	DEFAULT_SAFEGUARDS_SETTINGS,
 	getSafeguardsJsonPath,
 	loadSafeguardsSettings,
+	migrateSafeguardsSettings,
 	saveSafeguardsSettings,
 } from "../src/settings.js";
 
@@ -76,6 +77,48 @@ describe("saveSafeguardsSettings", () => {
 		expect(existsSync(nestedPath)).toBe(false);
 		saveSafeguardsSettings(DEFAULT_SAFEGUARDS_SETTINGS, nestedPath);
 		expect(loadSafeguardsSettings(nestedPath)).toEqual(DEFAULT_SAFEGUARDS_SETTINGS);
+	});
+});
+
+describe("migrateSafeguardsSettings", () => {
+	const migratePath = join(dir, "migrate.json");
+	const read = () => JSON.parse(readFileSync(migratePath, "utf8"));
+
+	it("adds shipped commands the file predates, keeping every existing entry and field", () => {
+		// A file from before cp/mkdir existed, with deliberate user choices.
+		const old = { commands: { rm: "allow", git: "deny", python: "ask" }, defaultPolicy: "deny", note: "mine" };
+		writeFileSync(migratePath, JSON.stringify(old), "utf8");
+		const added = migrateSafeguardsSettings(migratePath);
+		expect(added).toContain("cp");
+		expect(added).toContain("mkdir");
+		expect(added).not.toContain("rm");
+		const migrated = read();
+		expect(migrated.commands.cp).toBe("ask");
+		expect(migrated.commands.mkdir).toBe("allow");
+		expect(migrated.commands.rm).toBe("allow");
+		expect(migrated.commands.git).toBe("deny");
+		expect(migrated.commands.python).toBe("ask");
+		expect(migrated.defaultPolicy).toBe("deny");
+		expect(migrated.note).toBe("mine");
+		expect(Object.keys(migrated.commands)).toEqual(
+			expect.arrayContaining(Object.keys(DEFAULT_SAFEGUARDS_SETTINGS.commands)),
+		);
+	});
+
+	it("does nothing when the file is already complete, missing or malformed", () => {
+		saveSafeguardsSettings(DEFAULT_SAFEGUARDS_SETTINGS, migratePath);
+		expect(migrateSafeguardsSettings(migratePath)).toEqual([]);
+		expect(migrateSafeguardsSettings(join(dir, "never-written.json"))).toEqual([]);
+		expect(existsSync(join(dir, "never-written.json"))).toBe(false);
+		writeFileSync(migratePath, "{ not json", "utf8");
+		expect(migrateSafeguardsSettings(migratePath)).toEqual([]);
+		expect(readFileSync(migratePath, "utf8")).toBe("{ not json");
+	});
+
+	it("fills in a file that has no commands object yet", () => {
+		writeFileSync(migratePath, JSON.stringify({ defaultPolicy: "ask" }), "utf8");
+		migrateSafeguardsSettings(migratePath);
+		expect(read().commands).toEqual(DEFAULT_SAFEGUARDS_SETTINGS.commands);
 	});
 });
 

@@ -166,6 +166,51 @@ export function saveSafeguardsSettings(settings: SafeguardsSettings, path: strin
 }
 
 /**
+ * Brings an existing safeguards.json up to date with the shipped table: every
+ * command in DEFAULT_SAFEGUARDS_SETTINGS that the file has no entry for is
+ * added with its shipped state. Run on every start, so a command added in a
+ * later release (cp, mkdir) shows up in the file, the IDE panel and
+ * /safeguards without anyone reading release notes.
+ *
+ * Only adds, never changes: an entry the user set - including one set to
+ * the opposite of the shipped state - is left as it is, and so is every
+ * other field in the file. commandState() already resolves a missing entry
+ * to the same shipped state, so adding it changes nothing about what runs.
+ * A missing file stays missing (the shipped defaults apply as they are) and
+ * a malformed one is left alone for the user to fix. Returns the names added.
+ */
+export function migrateSafeguardsSettings(path: string = getSafeguardsJsonPath()): string[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return [];
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+	const file = parsed as Record<string, unknown>;
+	const existing = file.commands;
+	if (existing !== undefined && (typeof existing !== "object" || existing === null || Array.isArray(existing)))
+		return [];
+	const commands = (existing ?? {}) as Record<string, unknown>;
+	const present = new Set(Object.keys(commands).map((name) => name.trim()));
+
+	const added: string[] = [];
+	for (const [name, state] of Object.entries(DEFAULT_SAFEGUARDS_SETTINGS.commands)) {
+		if (present.has(name)) continue;
+		commands[name] = state;
+		added.push(name);
+	}
+	if (added.length === 0) return [];
+	file.commands = commands;
+	try {
+		writeFileSync(path, `${JSON.stringify(file, null, "\t")}\n`, "utf8");
+	} catch {
+		return [];
+	}
+	return added;
+}
+
+/**
  * Resolves the effective state for one command name. `builtins` is passed in
  * (rather than imported from shell/execute.ts) to avoid a circular import -
  * execute.ts already imports this module for SafeguardsSettings itself.

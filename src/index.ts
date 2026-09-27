@@ -31,10 +31,15 @@ import { registerSafeguardsCommand } from "./command.ts";
 import { registerConfirmGuard } from "./confirm-guard.ts";
 import { createSafeguardGrepTool } from "./grep/tool.ts";
 import { registerPathGuard } from "./path-guard.ts";
+import { migrateSafeguardsSettings } from "./settings.ts";
 import { createEmulatedBashTool } from "./shell/tool.ts";
 
 export default function piSafeguards(pi: ExtensionAPI, ctx?: ExtensionContext) {
 	const cwd = ctx?.cwd ?? process.cwd();
+
+	// First, so the bash tool's policy description below already sees a
+	// command a newer release added to the shipped table.
+	migrateSafeguardsSettings();
 
 	registerPathGuard(pi);
 	registerConfirmGuard(pi);

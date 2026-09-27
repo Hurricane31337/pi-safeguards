@@ -161,6 +161,13 @@ built-in, then `defaultPolicy` (`shippedCommandState()`). A file written before 
 gets the shipped state for it: `cp` asks rather than being allowed as a built-in. `/safeguards` lists
 those built-ins under "without an override", so they are visible too.
 
+The file itself is also kept current: on every start (IDE and TUI) `migrateSafeguardsSettings()` adds
+every shipped command the file has no entry for, with its shipped state. It only ever adds: entries the user
+set, `defaultPolicy` and any other field stay as they are, a missing file stays missing, and a
+malformed one is left alone. A new command in a later release therefore appears in the file, the IDE
+panel and `/safeguards` without anyone editing it by hand. Tests point `PI_SAFEGUARDS_JSON_PATH` at a
+nonexistent file (`vitest.config.ts`) so they never touch the developer's real one.
+
 `/safeguards <command> clear` on one of these resets it back to this table's value rather than to
 the raw built-in default (which would otherwise be `allow` for all of them, since every command here
 is one of the emulator's built-ins — see `commandState()`).
