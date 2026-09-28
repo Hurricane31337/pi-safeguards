@@ -197,9 +197,18 @@ function applyRedirect(
 	if (isBlocked(path, root)) {
 		return `Access denied: "${redirect.target}" is outside the project directory.`;
 	}
+	// Every command's return value in this emulator is captured like $(...) -
+	// its own trailing newline stripped, with call sites (statement joining,
+	// `time`'s report) re-adding "\n" themselves where display needs it. A
+	// real redirect instead writes the command's actual stdout bytes, which
+	// for line-oriented output (echo above all) end in a newline; reinstating
+	// it here is what a real `>`/`>>` would have written, and is why `>>`
+	// used to glue consecutive echoes onto one line instead of appending a
+	// new one.
+	const text = content && !content.endsWith("\n") ? `${content}\n` : content;
 	try {
-		if (redirect.append) appendFileSync(path, content, "utf8");
-		else writeFileSync(path, content, "utf8");
+		if (redirect.append) appendFileSync(path, text, "utf8");
+		else writeFileSync(path, text, "utf8");
 	} catch (error) {
 		return `Error writing '${redirect.target}': ${(error as Error).message}`;
 	}

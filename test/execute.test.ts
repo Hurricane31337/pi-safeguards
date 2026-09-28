@@ -877,16 +877,16 @@ describe("heredoc", () => {
 });
 
 describe("output redirection", () => {
-	it("writes a command's output to a file inside the root, overwriting", () => {
+	it("writes a command's output to a file inside the root, overwriting, with the trailing newline real stdout would have", () => {
 		expect(runWith("echo hello > out.txt", { commands: { redirect: "allow" } })).toBe("");
-		expect(readFileSync(join(root, "out.txt"), "utf8")).toBe("hello");
+		expect(readFileSync(join(root, "out.txt"), "utf8")).toBe("hello\n");
 	});
 
-	it("appends with >>", () => {
+	it("appends with >>, each write landing on its own line", () => {
 		const opts = { commands: { redirect: "allow" as const } };
 		runWith("echo one > append.txt", opts);
 		runWith("echo two >> append.txt", opts);
-		expect(readFileSync(join(root, "append.txt"), "utf8")).toBe("onetwo");
+		expect(readFileSync(join(root, "append.txt"), "utf8")).toBe("one\ntwo\n");
 	});
 
 	it("refuses to write outside the root", () => {
