@@ -94,20 +94,24 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"==> name <== header per file when given more than one), find [-name] [-type f/d] [-maxdepth] " +
 			"(paths are root-relative, like ./src/x; descends into dot-directories too, same as grep -r, " +
 			"except .git and node_modules), cat (reads stdin when given no file, like real cat in " +
-			"a `x | cat` pass-through), ls [-d], cd, rm [-rf], mv, cp [-r] [-n] (copies bytes as they are, so a file keeps its encoding), mkdir [-p], echo, pwd. " +
+			"a `x | cat` pass-through), ls [-d], cd, rm [-rf], mv, cp [-r] [-n] (copies bytes as they are, so a file keeps its encoding), mkdir [-p], echo, pwd, which [-a] NAME (where a program is found on PATH), true, false. " +
 			"Glob patterns like *.py are expanded for wc, grep, rm, mv and cp. " +
 			"git is forwarded to the system-installed git executable (requires git on PATH). " +
 			"time [-p] before a statement times all of it (pipes and redirect included) and prints the wall-clock " +
 			"time after its output, as bash does (real only - user/sys are not measured). time has a policy of its " +
 			"own, and the command it times is checked as well - the same for wrappers like env, nice, timeout, " +
 			"xargs or sudo: every program they would run must be permitted. " +
-			"Pipe chaining with | is supported, and ; / && / newlines separate statements " +
-			"(cd changes the directory for statements after it in the same command); there are no exit " +
-			"codes, so && never skips a later statement even if an earlier one failed. " +
+			"Pipe chaining with | is supported, and ; / newlines separate statements " +
+			"(cd changes the directory for statements after it in the same command). && and || go by the " +
+			"exit status of the command before them: an external program's own exit code, 1 for a grep without a " +
+			"match, a missing file or a failing cd, 0 otherwise; $? holds the last status. " +
 			"cd, rm, mv, cp and mkdir can only reach the project directory and below; cd to a nonexistent path or a " +
 			'file reports "cd: no such file or directory" and does not move, same as real cd. ' +
-			"There is no $VAR expansion or FOO=bar assignment syntax anywhere - a literal $VAR or " +
-			"FOO=bar in a command is passed through as-is, not expanded or executed as an assignment. " +
+			"Shell variables work within one command: NAME=value (also export NAME=value), then $NAME, " +
+			"${NAME} or ${NAME:-default}, e.g. F=src/x.vb; grep -n foo $F. They are not passed on to programs. " +
+			"for NAME in WORD...; do ...; done loops work (nestable, globs like *.py expand, $LIST splits into " +
+			"words). A value is only ever data, never re-read as commands. A command name cannot come from a glob " +
+			"result. if/while/case, functions, $(...) and `...` are not supported. " +
 			"Output redirection with > (overwrite) and >> (append) is supported and stays inside the " +
 			"project directory like every other command; writes are UTF-8 — for a file that must keep " +
 			"its original encoding, use the write/edit tools instead. Only stdout redirection is " +

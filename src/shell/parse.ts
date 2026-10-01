@@ -113,6 +113,72 @@ export function splitStatements(command: string): string[] {
 	return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/** How an item is joined to the one after it. */
+export type Connector = ";" | "&&" | "||";
+
+export interface Item {
+	text: string;
+	/** `;` (or a newline), `&&` or `||` - how this item is joined to the NEXT one. */
+	connector: Connector;
+}
+
+/**
+ * Split a command string into items on `;`, newlines, `&&` and `||`, keeping
+ * which of them joined each pair so the interpreter can honour the exit status
+ * (`a && b || c`). Respects quotes. A backslash-newline outside single quotes
+ * is a line continuation and disappears. A separator that follows `&&` / `||`
+ * after a line break (an `&&` at the end of one line, its right side on the
+ * next) does not cancel the operator.
+ */
+export function splitItems(command: string): Item[] {
+	const items: Item[] = [];
+	let current = "";
+	let inSingle = false;
+	let inDouble = false;
+
+	const finish = (connector: Connector) => {
+		const text = current.trim();
+		current = "";
+		if (text.length > 0) {
+			items.push({ text, connector });
+			return;
+		}
+		// An empty item (blank line, `;;`): keep a pending `&&`/`||`, otherwise the
+		// separator that ended this empty item replaces a plain `;`.
+		const last = items[items.length - 1];
+		if (last && last.connector === ";") last.connector = connector;
+	};
+
+	for (let i = 0; i < command.length; i++) {
+		const char = command[i];
+		if (char === "\\" && command[i + 1] === "\n" && !inSingle) {
+			i++;
+			continue;
+		}
+		if (char === "'" && !inDouble) inSingle = !inSingle;
+		else if (char === '"' && !inSingle) inDouble = !inDouble;
+		else if (!inSingle && !inDouble) {
+			if (char === "\n" || char === ";") {
+				finish(";");
+				continue;
+			}
+			if (char === "&" && command[i + 1] === "&") {
+				finish("&&");
+				i++;
+				continue;
+			}
+			if (char === "|" && command[i + 1] === "|") {
+				finish("||");
+				i++;
+				continue;
+			}
+		}
+		current += char;
+	}
+	finish(";");
+	return items;
+}
+
 /** Split a command string on `|`, respecting single and double quotes. */
 export function splitByPipes(command: string): string[] {
 	const parts: string[] = [];

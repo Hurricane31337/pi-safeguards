@@ -75,10 +75,42 @@ default is `ask`, so the model is not silently refused and not silently allowed 
 it is asked about by name every time. Set `defaultPolicy` to `deny` (or override a specific one of
 them) for the old refuse-outright behaviour.
 
-There is no `$VAR` expansion, no `FOO=bar` prefix-assignment syntax, and `&&` is not gated on an
-exit code (there are no exit codes at all — see `splitStatements()`'s doc comment — so `&&` behaves
-exactly like `;`, and a denied/failed command never skips what comes after it). None of this is a
-regression to chase; it was never implemented.
+### Variables, loops and exit status (`src/shell/interpreter.ts`)
+
+One small interpreter sits under the commands, and it is the **only** place a command string is
+read: `executeShellCommand` runs it with real hooks, `confirm-guard.ts` walks the very same code in
+plan mode (`src/shell/plan.ts`, `programsIn`) where nothing executes and every program that would run is
+recorded. Two parsers for one language eventually disagree, and the gap is where a deny/ask policy leaks.
+
+Supported:
+
+- `NAME=value` (and `export NAME=value`), then `$NAME`, `${NAME}`, `${NAME:-default}` and `$?` in words and
+  double quotes. An unquoted expansion splits into words, a quoted one stays whole, single quotes expand
+  nothing. `F=src/x.vb; grep -n foo $F` works.
+- `for NAME in WORD...; do ...; done`, nestable, on one line or several; the list may use globs
+  (`*.py`, `src/*/*.vb`, kept inside the sandbox; no match leaves the pattern as it is, like bash) and
+  variables. At most 2000 iterations per loop and 5000 statements per call.
+- `&&` and `||` by exit status, left to right. A real program's own exit code counts; for the emulated
+  commands the status is read from their output the way a script's author would: 1 for a grep without a
+  match, for an error line led by the command's name (`cat: x: No such file…`) and for a failing `cd`.
+  `;` and newlines stay unconditional. `true` and `false` exist and are never asked about.
+- `which [-a] NAME` - the path a program is found at on `PATH` (with `PATHEXT` on Windows); an emulated
+  command is reported as built in. It has a policy of its own like every command.
+
+What keeps this from being an escape route:
+
+- A value is data. Statements, pipes and redirects are found in the script text *before* anything is
+  expanded, so `X="a; rm -rf ."; echo $X` prints text. A `$` in a command name is expanded and the
+  *expanded* name is what the policy is asked about (`C=python; $C x` is python).
+- Variables are not exported. A child process gets the Node process's own environment, so `PATH=…`
+  cannot change which program a name resolves to; a `NAME=value cmd` prefix sets the variable and runs `cmd`
+  without it.
+- A command name (or, behind a wrapper like `env`, any word) that came out of a glob is refused when
+  running - `for f in *; do $f; done` would otherwise run whatever file happens to be called `rm` - and counts
+  as an unknown program when planning, so the guard judges it by `defaultPolicy`.
+
+Not supported, and said so instead of failing as a missing program: `if`/`while`/`case`, functions,
+`$(...)`, backticks, subshells, `&` and `2>file`.
 
 ### Redirection and heredocs
 
@@ -155,7 +187,8 @@ What a fresh install starts from, and what `loadSafeguardsSettings()` falls back
 
 | Command | State |
 |---|---|
-| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `time`, `uniq`, `wc` | `allow` |
+| `cat`, `cd`, `echo`, `find`, `grep`, `head`, `ls`, `mkdir`, `printf`, `pwd`, `sed`, `sort`, `tail`, `time`, `uniq`, `wc`, `which` | `allow` |
+| `true`, `false` | always `allow` (shell no-ops; overridable like any command) |
 | `cp`, `git`, `mv`, `rm` | `ask` |
 
 **Every program in a chain is checked, not just the first.** Each pipe stage and statement is

@@ -5,6 +5,11 @@
  * below simply does not run — there is no fallback to a real shell — so the
  * model cannot reach the filesystem except through the commands here, all of
  * which are anchored to the sandbox root.
+ *
+ * Control flow (variables, `for`, `&&`/`||` by exit status) lives in
+ * interpreter.ts; this file supplies what the interpreter runs *with*: the
+ * commands, their exit statuses, `cd`, redirects and `time`. confirm-guard.ts
+ * walks the very same interpreter with hooks that record instead of run.
  */
 
 import { appendFileSync, statSync, writeFileSync } from "node:fs";
@@ -28,19 +33,11 @@ import {
 	execUniq,
 	execWc,
 } from "./commands.ts";
-import { execExternal } from "./external.ts";
-import { execGit } from "./git.ts";
-import {
-	commandChain,
-	extractHeredocs,
-	extractRedirect,
-	heredocBodyFor,
-	parseArgs,
-	type RedirectSpec,
-	splitByPipes,
-	splitStatements,
-	splitTimePrefix,
-} from "./parse.ts";
+import { execExternalResult } from "./external.ts";
+import { execGitResult } from "./git.ts";
+import { type CdResult, type Hooks, interpret, type SegmentResult, type Word } from "./interpreter.ts";
+import { commandChain, type RedirectSpec } from "./parse.ts";
+import { execWhich } from "./which.ts";
 
 /** Commands available in the emulator, for the tool description and the refusal message. */
 export const SUPPORTED_COMMANDS = [
@@ -64,105 +61,137 @@ export const SUPPORTED_COMMANDS = [
 	"mkdir",
 	"time",
 	"git",
+	"which",
 ] as const;
 
+/** Commands whose output is whatever the model told them to print, not a report that could be an error. */
+const ECHOING_COMMANDS = new Set(["echo", "printf", "pwd", "true", "false"]);
+
+/**
+ * Exit status of an emulated command. The command implementations return text
+ * only, so this reads the text the way a shell script's author would: an error
+ * report leads a line with the command's name (`cat: x: No such file`), and grep
+ * exits 1 when nothing matched.
+ */
+function builtinStatus(program: string, output: string): number {
+	if (/^(Error in |\[bash-emulator\]|Access denied)/.test(output)) return 1;
+	if (program === "grep" && output === "") return 1;
+	if (!ECHOING_COMMANDS.has(program) && output.split("\n").some((line) => line.startsWith(`${program}: `))) return 1;
+	return 0;
+}
+
 function executeSegment(
-	segment: string,
+	words: Word[],
 	cwd: string,
 	root: string,
 	stdin: string | null,
 	settings: SafeguardsSettings,
-): string {
-	// Redirections the emulator has no concept of; dropping them keeps the
-	// common "2>/dev/null" idiom from turning into a bogus argument.
-	const command = segment
-		.replace(/\s+2>\/dev\/null/g, "")
-		.replace(/\s+>\s*\/dev\/null/g, "")
-		.replace(/\s+2>\s*nul\b/gi, "")
-		.replace(/\s+>\s*nul\b/gi, "")
-		.trim();
-
-	const args = parseArgs(command);
-	if (args.length === 0) return stdin ?? "";
+): SegmentResult {
+	const args = words.map((word) => word.text);
+	if (args.length === 0) return { output: stdin ?? "", status: 0 };
 	const program = args[0];
+	const chain = commandChain(args);
+
+	// A name that came out of a glob is whatever file happens to exist; the policy
+	// the guard asked about was for "some file", so it must not become a command.
+	if (words[0].tainted || (chain.length > 1 && words.some((word) => word.tainted))) {
+		return {
+			output:
+				"[bash-emulator] Ein Befehlsname darf nicht aus einem Glob-Ergebnis stammen (z.B. for f in *; do $f; done).",
+			status: 1,
+		};
+	}
 
 	// "ask" reaches here only after confirm-guard.ts's tool_call hook already
 	// asked and the user approved - by this point it must run exactly like
 	// "allow" would. Only whether a prompt happened first differs between the
 	// two, and that decision was already made upstream. Every program in the
 	// chain is checked: `env python` must not run a denied python.
-	const denied = commandChain(args).find((name) => commandState(name, settings, SUPPORTED_COMMANDS) === "deny");
-	if (denied) return deniedMessage(denied);
+	const denied = chain.find((name) => commandState(name, settings, SUPPORTED_COMMANDS) === "deny");
+	if (denied) return { output: deniedMessage(denied), status: 1 };
 
 	// `a | time b`: bash hands this to /usr/bin/time, which times b alone.
 	if (program === "time") {
-		const { posix, rest } = splitTimePrefix(command);
+		const posix = args[1] === "-p";
+		const rest = words.slice(posix ? 2 : 1);
 		const started = performance.now();
-		const output = rest ? executeSegment(rest, cwd, root, stdin, settings) : "";
+		const inner = rest.length > 0 ? executeSegment(rest, cwd, root, stdin, settings) : { output: "", status: 0 };
 		const elapsed = formatElapsed((performance.now() - started) / 1000, posix);
-		return output ? `${output}\n${elapsed}` : elapsed;
+		return { output: inner.output ? `${inner.output}\n${elapsed}` : elapsed, status: inner.status };
 	}
 
 	try {
+		let output: string;
 		switch (program) {
 			case "grep":
-				return execGrep(args, cwd, root, stdin);
+				output = execGrep(args, cwd, root, stdin);
+				break;
 			case "sed":
-				return execSed(args, cwd, root, stdin);
+				output = execSed(args, cwd, root, stdin);
+				break;
 			case "wc":
-				return execWc(args, cwd, root, stdin);
+				output = execWc(args, cwd, root, stdin);
+				break;
 			case "uniq":
-				return execUniq(args, cwd, root, stdin);
+				output = execUniq(args, cwd, root, stdin);
+				break;
 			case "sort":
-				return execSort(args, cwd, root, stdin);
+				output = execSort(args, cwd, root, stdin);
+				break;
 			case "head":
-				return execHead(args, cwd, root, stdin);
+				output = execHead(args, cwd, root, stdin);
+				break;
 			case "tail":
-				return execTail(args, cwd, root, stdin);
+				output = execTail(args, cwd, root, stdin);
+				break;
 			case "find":
-				return execFind(args, cwd, root);
+				output = execFind(args, cwd, root);
+				break;
 			case "cat":
-				return execCat(args, cwd, root, stdin);
+				output = execCat(args, cwd, root, stdin);
+				break;
 			case "ls":
-				return execLs(args, cwd, root);
+				output = execLs(args, cwd, root);
+				break;
 			case "rm":
-				return execRm(args, cwd, root);
+				output = execRm(args, cwd, root);
+				break;
 			case "mv":
-				return execMv(args, cwd, root);
+				output = execMv(args, cwd, root);
+				break;
 			case "cp":
-				return execCp(args, cwd, root);
+				output = execCp(args, cwd, root);
+				break;
 			case "mkdir":
-				return execMkdir(args, cwd, root);
+				output = execMkdir(args, cwd, root);
+				break;
 			case "echo":
-				return args.slice(1).join(" ");
+				output = args.slice(1).join(" ");
+				break;
 			case "pwd":
-				return cwd.replace(/\\/g, "/");
+				output = cwd.replace(/\\/g, "/");
+				break;
 			case "true":
+				return { output: "", status: 0 };
 			case "false":
-				return "";
+				return { output: "", status: 1 };
 			case "printf":
-				return execPrintf(args);
+				output = execPrintf(args);
+				break;
+			case "which":
+				return execWhich(args, cwd, SUPPORTED_COMMANDS);
 			case "git":
-				return execGit(args, cwd, stdin);
+				return execGitResult(args, cwd, stdin);
 			default:
 				// Not one of the emulated commands, and not denied (checked above) -
 				// so its state is "ask" (already approved) or "allow": run it for
 				// real, without a shell.
-				return execExternal(args, cwd, stdin);
+				return execExternalResult(args, cwd, stdin);
 		}
+		return { output, status: builtinStatus(program, output) };
 	} catch (error) {
-		return `Error in ${program}: ${(error as Error).message}`;
+		return { output: `Error in ${program}: ${(error as Error).message}`, status: 1 };
 	}
-}
-
-/** Strip one matching pair of surrounding quotes, e.g. from `cd "My Dir"`. */
-function unquote(text: string): string {
-	if (text.length >= 2) {
-		const first = text[0];
-		const last = text[text.length - 1];
-		if ((first === '"' || first === "'") && first === last) return text.slice(1, -1);
-	}
-	return text;
 }
 
 /** `/dev/null` and Windows' `nul` both mean "discard", not "write a file named that". */
@@ -193,7 +222,7 @@ function applyRedirect(
 		return "[bash-emulator] '>' ist deaktiviert (Einstellungen).";
 	}
 
-	const path = resolve(cwd, unquote(redirect.target));
+	const path = resolve(cwd, redirect.target);
 	if (isBlocked(path, root)) {
 		return `Access denied: "${redirect.target}" is outside the project directory.`;
 	}
@@ -230,19 +259,45 @@ function formatElapsed(seconds: number, posix: boolean): string {
 	return `\nreal\t${minutes}m${(seconds - minutes * 60).toFixed(3)}s`;
 }
 
+/** `cd DIR`: the only state a statement leaves behind for the next one. */
+function changeDirectory(arg: string | undefined, cwd: string, root: string, settings: SafeguardsSettings): CdResult {
+	if (commandState("cd", settings, SUPPORTED_COMMANDS) === "deny") {
+		return { cwd, output: "[bash-emulator] 'cd' ist deaktiviert (Einstellungen).", status: 1 };
+	}
+	if (!arg) return { cwd, output: null, status: 0 };
+
+	const target = resolve(cwd, arg);
+	// Silently ignored, like a `cd` that would leave the root always was:
+	// the model gets an unrelated tool call to explain the containment,
+	// not this one, since a refusal message here quotes the walked path.
+	// A target *inside* the sandbox gets no such pass, though - a typo'd
+	// or nonexistent directory needs to say so, or every relative path
+	// after it fails with a confusing "No such file" that names the
+	// wrong command, while the cd itself silently "succeeded".
+	if (isOutside(target, root)) return { cwd, output: null, status: 0 };
+	let isDir = false;
+	try {
+		isDir = statSync(target).isDirectory();
+	} catch {
+		isDir = false;
+	}
+	if (!isDir) return { cwd, output: `cd: no such file or directory: ${arg}`, status: 1 };
+	return { cwd: target, output: null, status: 0 };
+}
+
 /**
- * Execute a full command string. Statements are split on `;`, newlines and
- * `&&` (see splitStatements); `cd DIR` changes the working directory for every
- * statement after it in the same call — this is the only state the emulator
- * carries between statements, and it never survives past this one call, since
- * each tool invocation is re-anchored to the session's cwd (see tool.ts).
- * Within a statement, `|` chains segments through stdin as before.
+ * Execute a full command string. Statements are separated by `;`, newlines,
+ * `&&` and `||`, the last two by the previous command's exit status; `cd DIR`
+ * changes the working directory for every statement after it in the same call —
+ * together with variables, the only state the emulator carries between
+ * statements, and it never survives past this one call, since each tool
+ * invocation is re-anchored to the session's cwd (see tool.ts). Within a
+ * statement, `|` chains segments through stdin.
  *
- * Heredocs (`<<'EOF' … EOF`) are unwrapped once up front via
- * extractHeredocs() so a multi-line body never gets shredded by
- * splitStatements; a segment carrying that body's marker feeds it in as
- * that segment's stdin, overriding anything piped in (matching real shell
- * precedence - a heredoc IS the command's stdin).
+ * Heredocs (`<<'EOF' … EOF`) are unwrapped once up front so a multi-line body
+ * never gets shredded into statements; a segment carrying that body's marker
+ * feeds it in as that segment's stdin, overriding anything piped in (matching
+ * real shell precedence - a heredoc IS the command's stdin).
  */
 export function executeShellCommand(
 	input: string,
@@ -252,75 +307,22 @@ export function executeShellCommand(
 	// settings file; production callers (tool.ts) never pass this.
 	settings: SafeguardsSettings = loadSafeguardsSettings(),
 ): string {
-	let workingDir = cwd;
-	const outputs: string[] = [];
-	const { rewritten, bodies } = extractHeredocs(input);
-
-	// One statement's output, or null for none. A closure so `cd` can move
-	// workingDir for the statements after it, and so `time` below can wrap
-	// every way a statement ends.
-	const runStatement = (statement: string): string | null => {
-		const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
-		if (cdMatch) {
-			if (commandState("cd", settings, SUPPORTED_COMMANDS) === "deny") {
-				return "[bash-emulator] 'cd' ist deaktiviert (Einstellungen).";
-			}
-			const arg = unquote((cdMatch[1] ?? "").trim());
-			if (arg) {
-				const target = resolve(workingDir, arg);
-				// Silently ignored, like a `cd` that would leave the root always was:
-				// the model gets an unrelated tool call to explain the containment,
-				// not this one, since a refusal message here quotes the walked path.
-				// A target *inside* the sandbox gets no such pass, though - a typo'd
-				// or nonexistent directory needs to say so, or every relative path
-				// after it fails with a confusing "No such file" that names the
-				// wrong command, while the cd itself silently "succeeded".
-				if (!isOutside(target, root)) {
-					let isDir = false;
-					try {
-						isDir = statSync(target).isDirectory();
-					} catch {
-						isDir = false;
-					}
-					if (!isDir) return `cd: no such file or directory: ${arg}`;
-					workingDir = target;
-				}
-			}
-			return null;
-		}
-
-		const redirect = extractRedirect(statement);
-		const toRun = redirect ? redirect.command : statement;
-
-		let stdin: string | null = null;
-		for (const segment of splitByPipes(toRun)) {
-			const heredoc = heredocBodyFor(segment, bodies);
-			stdin = executeSegment(heredoc.cleaned, workingDir, root, heredoc.body ?? stdin, settings);
-		}
-
-		if (redirect) return applyRedirect(redirect, stdin ?? "", workingDir, root, settings);
-		return stdin;
+	const hooks: Hooks = {
+		segment: (words, stdin, workingDir) => executeSegment(words, workingDir, root, stdin, settings),
+		cd: (arg, workingDir) => changeDirectory(arg, workingDir, root, settings),
+		redirect: (spec, content, workingDir) => applyRedirect(spec, content, workingDir, root, settings),
+		timed: (posix, run) => {
+			if (commandState("time", settings, SUPPORTED_COMMANDS) === "deny") return [deniedMessage("time")];
+			const started = performance.now();
+			const output = run();
+			const lines: string[] = [];
+			if (output !== null && output !== "") lines.push(output);
+			// bash's format. Only wall-clock time is reported: user/sys would be
+			// this Node process alone, not the rg/git children doing the work, and
+			// a made-up 0.000s is worse than leaving them out.
+			lines.push(formatElapsed((performance.now() - started) / 1000, posix));
+			return lines;
+		},
 	};
-
-	for (const statement of splitStatements(rewritten)) {
-		const { timed, posix, rest } = splitTimePrefix(statement);
-		if (!timed) {
-			const output = runStatement(statement);
-			if (output !== null) outputs.push(output);
-			continue;
-		}
-		if (commandState("time", settings, SUPPORTED_COMMANDS) === "deny") {
-			outputs.push(deniedMessage("time"));
-			continue;
-		}
-		const started = performance.now();
-		const output = rest ? runStatement(rest) : null;
-		if (output !== null && output !== "") outputs.push(output);
-		// bash's format. Only wall-clock time is reported: user/sys would be
-		// this Node process alone, not the rg/git children doing the work, and
-		// a made-up 0.000s is worse than leaving them out.
-		outputs.push(formatElapsed((performance.now() - started) / 1000, posix));
-	}
-
-	return outputs.join("\n");
+	return interpret(input, cwd, root, hooks, false);
 }

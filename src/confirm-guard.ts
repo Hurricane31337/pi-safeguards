@@ -22,69 +22,12 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { commandState, loadSafeguardsSettings, REDIRECT_COMMAND, type SafeguardsSettings } from "./settings.ts";
+import { commandState, loadSafeguardsSettings, type SafeguardsSettings } from "./settings.ts";
 import { SUPPORTED_COMMANDS } from "./shell/execute.ts";
-import {
-	commandChain,
-	extractHeredocs,
-	extractRedirect,
-	heredocBodyFor,
-	parseArgs,
-	splitByPipes,
-	splitStatements,
-	splitTimePrefix,
-} from "./shell/parse.ts";
+import { programsIn } from "./shell/plan.ts";
 
 /** Native pi tool names that duplicate an emulated bash command (see module doc). */
 const NATIVE_TOOLS_WITH_BASH_EQUIVALENT = new Set(["grep", "find", "ls"]);
-
-/** `/dev/null` and Windows' `nul` both mean "discard", not a real write worth asking about. */
-function isNullTarget(target: string): boolean {
-	return target === "/dev/null" || target.toLowerCase() === "nul";
-}
-
-/**
- * Every program name a command string would invoke, including `cd` and, for
- * a real (non-null) `>`/`>>` target, the pseudo-program "redirect" - the
- * same name execute.ts's applyRedirect() checks commandState() against, so a
- * command that would write a file is asked/denied exactly like any other
- * command, not silently exempted because it arrives as shell syntax rather
- * than a program name. Must mirror execute.ts's heredoc/redirect handling
- * exactly (extractHeredocs before splitStatements, extractRedirect per
- * statement) - two independent implementations of "what will this command
- * actually do" is exactly the kind of drift that quietly reopens the gap
- * this function exists to close.
- */
-function programsIn(command: string): string[] {
-	const programs: string[] = [];
-	const { rewritten, bodies } = extractHeredocs(command);
-	for (const timedStatement of splitStatements(rewritten)) {
-		// `time` is a command with a policy of its own, and so is what it runs.
-		const { timed, rest: statement } = splitTimePrefix(timedStatement);
-		if (timed) programs.push("time");
-		const cdMatch = statement.match(/^cd(?:\s+.+)?$/s);
-		if (cdMatch) {
-			programs.push("cd");
-			continue;
-		}
-
-		const redirect = extractRedirect(statement);
-		if (redirect && !isNullTarget(redirect.target)) programs.push(REDIRECT_COMMAND);
-		const toInspect = redirect ? redirect.command : statement;
-
-		for (const segment of splitByPipes(toInspect)) {
-			const { cleaned } = heredocBodyFor(segment, bodies);
-			const withoutStderrRedirect = cleaned
-				.replace(/\s+2>\/dev\/null/g, "")
-				.replace(/\s+2>\s*nul\b/gi, "")
-				.trim();
-			// Every program the segment runs, not just argv[0]: `env python x`
-			// is python as much as it is env (see commandChain in parse.ts).
-			programs.push(...commandChain(parseArgs(withoutStderrRedirect)));
-		}
-	}
-	return programs;
-}
 
 /** Asks the user, failing closed with no UI to ask; shared by both tool_call cases. */
 async function confirmOrBlock(

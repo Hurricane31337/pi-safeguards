@@ -87,6 +87,7 @@ export const DEFAULT_SAFEGUARDS_SETTINGS: SafeguardsSettings = {
 		time: "allow",
 		uniq: "allow",
 		wc: "allow",
+		which: "allow",
 	},
 	defaultPolicy: "ask",
 };
@@ -234,5 +235,7 @@ export function shippedCommandState(
 ): CommandState {
 	const shipped = DEFAULT_SAFEGUARDS_SETTINGS.commands[program];
 	if (shipped) return shipped;
+	// Shell no-ops with no effect to govern; `a && true`, `cmd || true` are everywhere.
+	if (program === "true" || program === "false") return "allow";
 	return builtins.includes(program) ? "allow" : settings.defaultPolicy;
 }
