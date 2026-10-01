@@ -52,7 +52,7 @@ describe("path guard", () => {
 			expect(result?.block).toBe(true);
 			expect(result?.reason).toContain("outside the project directory");
 		}
-		for (const tool of ["grep", "find", "ls"]) {
+		for (const tool of ["grep", "find", "ls", "read_image"]) {
 			expect((await call(tool, { path: outside }))?.block).toBe(true);
 		}
 		expect((await call("read", { file_path: "../../etc/passwd" }))?.block).toBe(true);

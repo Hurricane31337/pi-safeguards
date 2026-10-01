@@ -3,7 +3,7 @@
  *
  * The tools themselves are pi's and stay untouched — this only refuses calls
  * whose path argument points outside the session's working directory. That is
- * the whole mechanism: read/write/edit take `file_path`, grep/find take `path`,
+ * the whole mechanism: read/read_image/write/edit take `file_path` or `path`, grep/find take `path`,
  * and `ls` is covered because its listing is rooted at the same directory.
  */
 
@@ -11,7 +11,8 @@ import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isOutside, isSpilled } from "./paths.ts";
 
-const GUARDED_TOOLS = new Set(["read", "write", "edit", "grep", "find", "ls"]);
+// read_image is pi-improved's image reader; guarding a tool that is not loaded costs nothing.
+const GUARDED_TOOLS = new Set(["read", "read_image", "write", "edit", "grep", "find", "ls"]);
 
 export function registerPathGuard(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
