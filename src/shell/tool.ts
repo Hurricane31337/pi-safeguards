@@ -108,7 +108,9 @@ export function createEmulatedBashTool(root: string): ToolDefinition<typeof bash
 			"cd, rm, mv, cp and mkdir can only reach the project directory and below; cd to a nonexistent path or a " +
 			'file reports "cd: no such file or directory" and does not move, same as real cd. ' +
 			"Shell variables work within one command: NAME=value (also export NAME=value), then $NAME, " +
-			"${NAME} or ${NAME:-default}, e.g. F=src/x.vb; grep -n foo $F. They are not passed on to programs. " +
+			"$" +
+			"{NAME} or $" +
+			"{NAME:-default}, e.g. F=src/x.vb; grep -n foo $F. They are not passed on to programs. " +
 			"for NAME in WORD...; do ...; done loops work (nestable, globs like *.py expand, $LIST splits into " +
 			"words). A value is only ever data, never re-read as commands. A command name cannot come from a glob " +
 			"result. if/while/case, functions, $(...) and `...` are not supported. " +

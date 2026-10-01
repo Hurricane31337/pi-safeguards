@@ -70,7 +70,7 @@ export function execWhich(args: string[], cwd: string, emulated: readonly string
 		}
 		const paths = findOnPath(name, cwd);
 		if (paths.length === 0) {
-			lines.push(`which: no ${name} in (PATH)`);
+			lines.push(`which: no ${name} in (${process.env.PATH ?? ""})`);
 			status = 1;
 			continue;
 		}

@@ -57,6 +57,12 @@ export interface Word {
 export interface SegmentResult {
 	output: string;
 	status: number;
+	/**
+	 * The output is the command's exact stdout, trailing newline (or the lack of one)
+	 * included - printf. Every other command's output has its final newline stripped,
+	 * like $(...), and gets one back when it is written to the combined stdout.
+	 */
+	exact?: boolean;
 }
 
 export interface CdResult {
@@ -71,7 +77,7 @@ export interface Hooks {
 	segment(words: Word[], stdin: string | null, cwd: string): SegmentResult;
 	cd(arg: string | undefined, cwd: string): CdResult;
 	/** Performs a redirect; returns an error message, or null. */
-	redirect(spec: RedirectSpec, content: string, cwd: string): string | null;
+	redirect(spec: RedirectSpec, content: string, cwd: string, exact: boolean): string | null;
 	/** A statement prefixed with `time`: returns the lines to emit (the statement's own output included). */
 	timed(posix: boolean, run: () => string | null): string[];
 }
@@ -388,8 +394,29 @@ interface Run {
 	scope: Scope;
 	cwd: string;
 	steps: number;
-	outputs: string[];
+	/** Everything written to stdout so far, as a real shell would have written it. */
+	stdout: string;
+	/** Whether the last write was exact (printf) rather than a line we added a newline to. */
+	lastExact: boolean;
 	bodies: Map<string, string>;
+}
+
+/** One statement's output: the text, and whether it is exact stdout (see SegmentResult.exact). */
+interface Emitted {
+	text: string;
+	exact: boolean;
+}
+
+/**
+ * Appends to the shared stdout. One buffer runs through the whole script (`;`,
+ * newlines, `&&`, `||`, loop bodies) with no separator of its own: a line-oriented
+ * command's output ends in a newline, a printf's ends wherever the format put it.
+ */
+function emit(run: Run, text: string, exact: boolean): void {
+	// A statement that printed nothing (a grep without a match, an assignment) writes nothing.
+	if (text === "") return;
+	run.stdout += exact ? text : `${text}\n`;
+	run.lastExact = exact;
 }
 
 const NULL_REDIRECT = /\s+2>\/dev\/null|\s+>\s*\/dev\/null|\s+2>\s*nul\b|\s+>\s*nul\b/gi;
@@ -438,23 +465,27 @@ function runSimple(text: string, run: Run): void {
 
 	const { timed, posix, rest } = splitTimePrefix(text);
 	if (!timed) {
-		const output = runStatement(text, run);
-		// A statement that printed nothing (a grep without a match, an assignment) leaves no blank line.
-		if (output !== null && output !== "") run.outputs.push(output);
+		const emitted = runStatement(text, run);
+		if (emitted !== null) emit(run, emitted.text, emitted.exact);
 		return;
 	}
-	run.outputs.push(...run.hooks.timed(posix, () => (rest ? runStatement(rest, run) : null)));
+	for (const line of run.hooks.timed(posix, () => {
+		const emitted = rest ? runStatement(rest, run) : null;
+		return emitted === null ? null : emitted.text;
+	})) {
+		emit(run, line, false);
+	}
 }
 
 /** One statement's output, or null for none. */
-function runStatement(statement: string, run: Run): string | null {
+function runStatement(statement: string, run: Run): Emitted | null {
 	const cdMatch = statement.match(/^cd(?:\s+(.+))?$/s);
 	if (cdMatch) {
 		const target = cdMatch[1] === undefined ? undefined : expandOne(cdMatch[1].trim(), run.scope).text;
 		const result = run.hooks.cd(target, run.cwd);
 		run.cwd = result.cwd;
 		run.scope.status = result.status;
-		return result.output;
+		return result.output === null ? null : { text: result.output, exact: false };
 	}
 
 	// `export` only sets variables here (they are never passed on to programs).
@@ -493,6 +524,7 @@ function runStatement(statement: string, run: Run): string | null {
 	const toRun = redirect ? redirect.command : statement;
 
 	let stdin: string | null = null;
+	let exact = false;
 	for (const segment of splitByPipes(toRun)) {
 		const heredoc = heredocBodyFor(segment, run.bodies);
 		const cleaned = heredoc.cleaned.replace(NULL_REDIRECT, "").trim();
@@ -501,20 +533,22 @@ function runStatement(statement: string, run: Run): string | null {
 		if (words.length === 0) result = { output: heredoc.body ?? stdin ?? "", status: 0 };
 		else result = run.hooks.segment(words, heredoc.body ?? stdin, run.cwd);
 		stdin = result.output;
+		exact = result.exact === true;
 		run.scope.status = result.status;
 	}
 
 	if (redirect) {
 		const target = expandOne(redirect.target, run.scope).text;
-		const error = run.hooks.redirect({ ...redirect, target }, stdin ?? "", run.cwd);
+		const error = run.hooks.redirect({ ...redirect, target }, stdin ?? "", run.cwd, exact);
 		if (error !== null) run.scope.status = 1;
-		return error;
+		return error === null ? null : { text: error, exact: false };
 	}
-	return stdin;
+	return stdin === null ? null : { text: stdin, exact };
 }
 
 /**
- * Interprets a script. Returns its output (statements joined by newlines), or, for
+ * Interprets a script. Returns its stdout - one buffer through all statements; the
+ * newline a line-oriented last command ends with is not included, as before - or, for
  * a script that cannot be interpreted, a message saying why - nothing runs then.
  */
 export function interpret(input: string, cwd: string, root: string, hooks: Hooks, plan: boolean): string {
@@ -534,14 +568,16 @@ export function interpret(input: string, cwd: string, root: string, hooks: Hooks
 		scope: { vars: new Map(), status: 0 },
 		cwd,
 		steps: 0,
-		outputs: [],
+		stdout: "",
+		lastExact: false,
 		bodies,
 	};
 	try {
 		runBlock(block, run);
 	} catch (error) {
 		if (!(error instanceof ScriptError)) throw error;
-		run.outputs.push(`[bash-emulator] ${error.message}`);
+		emit(run, `[bash-emulator] ${error.message}`, false);
 	}
-	return run.outputs.join("\n");
+	// The newline we added after a line-oriented last command is not part of its output.
+	return run.lastExact || run.stdout === "" ? run.stdout : run.stdout.slice(0, -1);
 }

@@ -188,7 +188,7 @@ function executeSegment(
 				// real, without a shell.
 				return execExternalResult(args, cwd, stdin);
 		}
-		return { output, status: builtinStatus(program, output) };
+		return { output, status: builtinStatus(program, output), exact: program === "printf" };
 	} catch (error) {
 		return { output: `Error in ${program}: ${(error as Error).message}`, status: 1 };
 	}
@@ -215,6 +215,7 @@ function applyRedirect(
 	cwd: string,
 	root: string,
 	settings: SafeguardsSettings,
+	exact: boolean,
 ): string | null {
 	if (isNullTarget(redirect.target)) return null;
 
@@ -234,7 +235,8 @@ function applyRedirect(
 	// it here is what a real `>`/`>>` would have written, and is why `>>`
 	// used to glue consecutive echoes onto one line instead of appending a
 	// new one.
-	const text = content && !content.endsWith("\n") ? `${content}\n` : content;
+	// printf's output is already exactly what stdout would have carried.
+	const text = !exact && content && !content.endsWith("\n") ? `${content}\n` : content;
 	try {
 		if (redirect.append) appendFileSync(path, text, "utf8");
 		else writeFileSync(path, text, "utf8");
@@ -310,7 +312,7 @@ export function executeShellCommand(
 	const hooks: Hooks = {
 		segment: (words, stdin, workingDir) => executeSegment(words, workingDir, root, stdin, settings),
 		cd: (arg, workingDir) => changeDirectory(arg, workingDir, root, settings),
-		redirect: (spec, content, workingDir) => applyRedirect(spec, content, workingDir, root, settings),
+		redirect: (spec, content, workingDir, exact) => applyRedirect(spec, content, workingDir, root, settings, exact),
 		timed: (posix, run) => {
 			if (commandState("time", settings, SUPPORTED_COMMANDS) === "deny") return [deniedMessage("time")];
 			const started = performance.now();

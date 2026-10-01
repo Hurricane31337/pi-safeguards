@@ -220,7 +220,10 @@ describe("which", () => {
 
 	it("reports an emulated command as built in and a missing one as failure", () => {
 		expect(run("which cat")).toContain("built into the bash emulator");
-		expect(run("which definitely-not-a-program-xyz")).toContain("no definitely-not-a-program-xyz in (PATH)");
+		// The message names the directories that were searched, not a placeholder.
+		expect(run("which definitely-not-a-program-xyz")).toBe(
+			`which: no definitely-not-a-program-xyz in (${process.env.PATH ?? ""})`,
+		);
 		expect(run("which definitely-not-a-program-xyz || echo gone")).toContain("gone");
 	});
 
@@ -276,5 +279,44 @@ describe("programsIn (what the confirm guard sees)", () => {
 	it("does not run anything while planning", () => {
 		programsIn("echo gone > planned.txt");
 		expect(() => readFileSync(join(root, "planned.txt"))).toThrow();
+	});
+});
+
+describe("stdout is one buffer across statements", () => {
+	it("adds no separator after printf output", () => {
+		expect(run("printf 'a'; printf 'b'; printf 'c'")).toBe("abc");
+		expect(run("printf 'no-trailing'; echo '[end]'")).toBe("no-trailing[end]");
+	});
+
+	it("keeps printf's own newlines and does not double them in a loop", () => {
+		expect(run("for n in 1 2 3; do printf 'n=%s\\n' $n; done")).toBe("n=1\nn=2\nn=3\n");
+		expect(run("printf 'a\\nb\\n'; printf 'c\\n'")).toBe("a\nb\nc\n");
+	});
+
+	it("still ends a line-oriented last command without an extra newline", () => {
+		expect(run("echo hi")).toBe("hi");
+		expect(run("echo a; echo b")).toBe("a\nb");
+		expect(run("printf 'x'; echo y; echo z")).toBe("xy\nz");
+	});
+
+	it("measures bytes the way a shell would", () => {
+		expect(run("printf 'a' | wc -c").trim()).toBe("1");
+		expect(run("printf 'a\\n' | wc -c").trim()).toBe("2");
+		expect(run("printf 'a\\nb\\n' | wc -c").trim()).toBe("4");
+	});
+
+	it("writes nothing for a statement that prints nothing", () => {
+		expect(run("grep zzz src/a.txt; echo after")).toBe("after");
+		expect(run("X=1; echo $X")).toBe("1");
+	});
+
+	it("writes a redirect's file but nothing to stdout", () => {
+		expect(run("printf 'a'; printf 'b' > buffer-test.txt; printf 'c'")).toBe("ac");
+		expect(readFileSync(join(root, "buffer-test.txt"), "utf8")).toBe("b");
+	});
+
+	it("still ends a redirected line-oriented command with a newline", () => {
+		run("echo line > buffer-echo.txt");
+		expect(readFileSync(join(root, "buffer-echo.txt"), "utf8")).toBe("line\n");
 	});
 });
